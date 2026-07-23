@@ -6,8 +6,11 @@ import {
   type DateGranularity,
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
-import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 import { expandMonthValueWithYearFromFilters } from "@/lib/dashboard/expandMonthFilterWithYear";
+import {
+  buildAggregationFilterSqlClause,
+  normalizeAggregationFilterOperator,
+} from "@/lib/dashboard/buildAggregationFilterSql";
 import {
   coerceGeoComponentOverrides,
   coerceGeoOverridesByXLabel,
@@ -18,7 +21,7 @@ import {
 } from "@/lib/geo/geo-enrichment";
 import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
 import { applyCompareSpecToRows } from "@/lib/dashboard/compareMetricRows";
-import { normalizeFiscalYearStartMonth, sqlFiscalYearPartitionExpr } from "@/lib/dashboard/fiscalYear";
+import { normalizeFiscalYearStartMonth, sqlFiscalAwareDateGroupExprs, sqlFiscalYearPartitionExpr } from "@/lib/dashboard/fiscalYear";
 import {
   applyComparativeRelationToRows,
   buildComparativeAggregateSql,
@@ -178,6 +181,8 @@ const ALLOWED_OPERATORS = new Set([
   "ILIKE",
   "LIKE",
   "IN",
+  "NOT IN",
+  "NOT_IN",
   "BETWEEN",
   "IS",
   "IS NOT",
@@ -188,6 +193,8 @@ const ALLOWED_OPERATORS = new Set([
   "SEMESTER",
   "EXACT",
   "CONTAINS",
+  "NOT_CONTAINS",
+  "DOES_NOT_CONTAIN",
   "STARTS_WITH",
   "ENDS_WITH",
   "YEAR_MONTH",
@@ -671,17 +678,12 @@ export async function runAggregateData(
 
     // Helper: condición WHEN para métrica (solo la parte "campo op valor")
     const buildWhenClause = (cond: MetricCondition): string => {
-      const op = (cond.operator || "=").toUpperCase().trim();
+      const op = normalizeAggregationFilterOperator(cond.operator);
       const f = quotedColumn(cond.field);
-      if (op === "IN") {
-        const list = (Array.isArray(cond.value) ? cond.value : [cond.value])
-          .map((x: any) => toSqlLiteral(x))
-          .join(", ");
-        if (!list.trim()) return "TRUE";
-        return `${f} IN (${list})`;
-      }
-      if ((op === "IS" || op === "IS NOT") && cond.value == null) return `${f} ${op} NULL`;
-      return `${f} ${op} ${toSqlLiteral(cond.value)}`;
+      return buildAggregationFilterSqlClause(
+        { field: cond.field, operator: op, value: cond.value },
+        { fieldExpression: f }
+      );
     };
     const buildConditionExpr = (cond: MetricCondition, thenExpr: string): string =>
       `CASE WHEN ${buildWhenClause(cond)} THEN ${thenExpr} END`;
@@ -922,17 +924,15 @@ export async function runAggregateData(
       const gran = body.dateGroupBy.granularity.toLowerCase().replace(/[^a-z]/g, "");
       const validGranList = ["day", "week", "month", "quarter", "semester", "year"];
       const validGran = validGranList.includes(gran) ? gran : "month";
-      if (validGran === "semester") {
-        dateGroupByExpr = `(EXTRACT(YEAR FROM ${dgDateExpr}::timestamp)::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${dgDateExpr}::timestamp) <= 6 THEN '1' ELSE '2' END)`;
-        dateGroupByDisplayExpr = `(CASE WHEN EXTRACT(MONTH FROM ${dgDateExpr}::timestamp) <= 6 THEN 'S1/' ELSE 'S2/' END || EXTRACT(YEAR FROM ${dgDateExpr}::timestamp)::text)`;
+      const fyStart = normalizeFiscalYearStartMonth(body.fiscalYearStartMonth);
+      const fiscalGroup = sqlFiscalAwareDateGroupExprs(dgDateExpr, validGran, fyStart);
+      if (fiscalGroup) {
+        dateGroupByExpr = fiscalGroup.groupExpr;
+        dateGroupByDisplayExpr = fiscalGroup.displayExpr;
       } else {
         dateGroupByExpr = `DATE_TRUNC('${validGran}', ${dgDateExpr}::timestamp)`;
-        if (validGran === "year") {
-          dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'YYYY')`;
-        } else if (validGran === "month") {
+        if (validGran === "month") {
           dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'YYYY-MM')`;
-        } else if (validGran === "quarter") {
-          dateGroupByDisplayExpr = `('T' || EXTRACT(QUARTER FROM ${dateGroupByExpr})::text || '/' || EXTRACT(YEAR FROM ${dateGroupByExpr})::text)`;
         } else {
           // day/week: mostrar fecha de inicio del bucket
           dateGroupByDisplayExpr = `TO_CHAR(${dateGroupByExpr}, 'DD/MM/YYYY')`;
@@ -1006,12 +1006,12 @@ export async function runAggregateData(
         .map((f) => {
           const resolvedFieldSql = resolveFieldToSql(f.field, derivedByName);
           const col = resolvedFieldSql ?? quotedColumn(f.field);
-          const op = (f.operator || "=").toUpperCase().trim();
+          const op = normalizeAggregationFilterOperator(f.operator);
 
           const useDateExprForYearLike =
             (op === "=" && isYearLike(f.value)) ||
             (op === "IN" && Array.isArray(f.value) && f.value.length > 0 && isYearLike(f.value));
-          let fieldExpression;
+          let fieldExpression: string;
           if (
             op === "MONTH" ||
             op === "DAY" ||
@@ -1022,99 +1022,25 @@ export async function runAggregateData(
             useDateExprForYearLike
           ) {
             fieldExpression = safeDateCast(col, dateSlashOrder);
+          } else if (f.cast === "numeric") {
+            fieldExpression = safeNumericCast(col);
           } else {
-            fieldExpression =
-              f.cast === "numeric"
-                ? safeNumericCast(col)
-                : col;
+            fieldExpression = col;
           }
 
-          if (op === "MONTH") {
-            const monthVal = expandMonthValueWithYearFromFilters(f.field, f.value, validFilters);
-            return buildMonthFilterSqlClause(fieldExpression, monthVal);
+          if (ALLOWED_OPERATORS.has(op) || /^[<>!=]+$/.test(op)) {
+            return buildAggregationFilterSqlClause(
+              { field: f.field, operator: op, value: f.value, cast: f.cast },
+              {
+                fieldExpression,
+                expandMonthValue: (field, value) =>
+                  expandMonthValueWithYearFromFilters(field, value, validFilters),
+                allFilters: validFilters,
+              }
+            );
           }
-          if (op === "YEAR") {
-            if (Array.isArray(f.value)) {
-              const list = f.value
-                .map((v) => Number(v))
-                .filter((n) => !isNaN(n))
-                .join(", ");
-              return `EXTRACT(YEAR FROM ${fieldExpression}) IN (${list})`;
-            }
-            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
-          }
-          if (op === "DAY") {
-            const dayStr = String(f.value || "").trim();
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) return "TRUE";
-            return `${fieldExpression} = DATE '${dayStr}'`;
-          }
-          if (op === "QUARTER") {
-            if (Array.isArray(f.value)) {
-              const list = f.value
-                .map((v) => Number(v))
-                .filter((n) => !isNaN(n) && n >= 1 && n <= 4)
-                .join(", ");
-              if (!list) return "TRUE";
-              return `EXTRACT(QUARTER FROM ${fieldExpression}) IN (${list})`;
-            }
-            const q = Number(f.value);
-            if (isNaN(q) || q < 1 || q > 4) return "TRUE";
-            return `EXTRACT(QUARTER FROM ${fieldExpression}) = ${q}`;
-          }
-          if (op === "SEMESTER") {
-            const semExpr = `(CASE WHEN EXTRACT(MONTH FROM ${fieldExpression}) <= 6 THEN 1 ELSE 2 END)`;
-            if (Array.isArray(f.value)) {
-              const list = f.value
-                .map((v) => Number(v))
-                .filter((n) => !isNaN(n) && (n === 1 || n === 2))
-                .join(", ");
-              if (!list) return "TRUE";
-              return `${semExpr} IN (${list})`;
-            }
-            const s = Number(f.value);
-            if (isNaN(s) || (s !== 1 && s !== 2)) return "TRUE";
-            return `${semExpr} = ${s}`;
-          }
-          if (op === "YEAR_MONTH") {
-            return buildMonthFilterSqlClause(fieldExpression, f.value);
-          }
-          if (op === "=" && isYearLike(f.value)) {
-            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
-          }
-          if (op === "IN" && Array.isArray(f.value) && f.value.length > 0 && isYearLike(f.value)) {
-            const yearList = f.value
-              .map((v) => Number(v))
-              .filter((n) => !isNaN(n) && n >= 1900 && n <= 2100)
-              .join(", ");
-            if (yearList) return `EXTRACT(YEAR FROM ${fieldExpression}) IN (${yearList})`;
-          }
-          if (op === "IN") {
-            const list = (Array.isArray(f.value) ? f.value : [])
-              .map((x) => toSqlLiteral(x))
-              .join(", ");
-            if (!list) return "TRUE";
-            return `${fieldExpression} IN (${list})`;
-          }
-          if (op === "BETWEEN") {
-            let from: any, to: any;
-            if (Array.isArray(f.value)) [from, to] = f.value;
-            else if (f.value && typeof f.value === "object") {
-              from = (f.value as any).from;
-              to = (f.value as any).to;
-            }
-            return `${fieldExpression} BETWEEN ${toSqlLiteral(
-              from
-            )} AND ${toSqlLiteral(to)}`;
-          }
-          if ((op === "IS" || op === "IS NOT") && f.value === null)
-            return `${fieldExpression} ${op} NULL`;
-
-          if (op === "EXACT") return `${fieldExpression} = ${toSqlLiteral(f.value)}`;
-          if (op === "CONTAINS") return `${fieldExpression}::text ILIKE '%' || ${toSqlLiteral(String(f.value ?? ""))} || '%'`;
-          if (op === "STARTS_WITH") return `${fieldExpression}::text ILIKE ${toSqlLiteral(String(f.value ?? ""))} || '%'`;
-          if (op === "ENDS_WITH") return `${fieldExpression}::text ILIKE '%' || ${toSqlLiteral(String(f.value ?? ""))}`;
-
-          return `${fieldExpression} ${op} ${toSqlLiteral(f.value)}`;
+          // Operador desconocido: no romper la query
+          return "TRUE";
         })
         .join(" AND ");
       whereClausesStr = whereClauses || "";
@@ -1326,7 +1252,10 @@ export async function runAggregateData(
             current,
             body.dateGroupBy.granularity as DateGranularity,
             current,
-            dateParseOpts
+            {
+              ...dateParseOpts,
+              fiscalYearStartMonth: normalizeFiscalYearStartMonth(body.fiscalYearStartMonth),
+            }
           );
           if (normalized != null) newRow[key] = normalized;
         }

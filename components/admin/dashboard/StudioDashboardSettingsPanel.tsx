@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { BarChart2, Database, Palette, SlidersHorizontal } from "lucide-react";
+import { BarChart2, Database, ImageIcon, Palette, SlidersHorizontal } from "lucide-react";
 import type { DashboardCompareDefaults, DashboardTheme } from "@/types/dashboard";
 import type { ETLDataResponse } from "@/hooks/admin/useAdminDashboardEtlData";
 import { DashboardThemeFormSections } from "./DashboardThemeFormSections";
@@ -10,6 +10,9 @@ import { DashboardCompareDefaultsSection } from "./DashboardCompareDefaultsSecti
 import { DashboardDatasetDiagnostics } from "./DashboardDatasetDiagnostics";
 import { StudioCollapsibleSection } from "./StudioCollapsibleSection";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { isDashboardCustomCoverUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 type GlobalFilterLike = { field?: string; operator?: string; value?: unknown };
 
@@ -20,6 +23,8 @@ export type StudioDashboardSettingsPanelProps = {
   onThemeChange: (patch: Partial<DashboardTheme>) => void;
   fiscalYearStartMonth: number;
   onFiscalYearStartMonthChange: (month: number) => void;
+  coverImageUrl: string;
+  onCoverImageUrlChange: (url: string) => void;
   dashboardCompareDefaults: DashboardCompareDefaults;
   onDashboardCompareDefaultsChange: (next: DashboardCompareDefaults) => void;
   globalFilters: GlobalFilterLike[];
@@ -39,6 +44,8 @@ export function StudioDashboardSettingsPanel({
   onThemeChange,
   fiscalYearStartMonth,
   onFiscalYearStartMonthChange,
+  coverImageUrl,
+  onCoverImageUrlChange,
   dashboardCompareDefaults,
   onDashboardCompareDefaultsChange,
   globalFilters,
@@ -54,6 +61,7 @@ export function StudioDashboardSettingsPanel({
 
   const sourceCount = etlData.dataSources?.length ?? 0;
   const compareEnabled = dashboardCompareDefaults.enabled;
+  const hasCover = isDashboardCustomCoverUrl(coverImageUrl);
 
   return (
     <div
@@ -68,7 +76,11 @@ export function StudioDashboardSettingsPanel({
       <div className="grid gap-2 lg:grid-cols-2">
         <StudioCollapsibleSection
           title="Fuentes de datos"
-          description={sourceCount > 0 ? `${sourceCount} fuente${sourceCount === 1 ? "" : "s"} conectada${sourceCount === 1 ? "" : "s"}` : "Sin fuentes"}
+          description={
+            sourceCount > 0
+              ? `${sourceCount} fuente${sourceCount === 1 ? "" : "s"} conectada${sourceCount === 1 ? "" : "s"}`
+              : "Sin fuentes"
+          }
           icon={<Database className="h-4 w-4" />}
           badge={sourceCount > 0 ? String(sourceCount) : undefined}
         >
@@ -148,6 +160,49 @@ export function StudioDashboardSettingsPanel({
               filterValues={studioFilterValues}
               dateFields={etlData.dataSources?.[0]?.fields?.date ?? []}
             />
+          </div>
+        </StudioCollapsibleSection>
+
+        <StudioCollapsibleSection
+          title="Imagen de portada"
+          description="Tarjeta de previsualización en Dashboards"
+          icon={<ImageIcon className="h-4 w-4" />}
+          badge={hasCover ? "Activa" : undefined}
+          className="lg:col-span-2"
+        >
+          <div className="space-y-3">
+            <p className="text-[11px] text-[var(--studio-fg-muted)]">
+              Se muestra en la tarjeta del listado (viewer y admin). Si hay portada, tiene prioridad sobre la
+              mini-vista del layout.
+            </p>
+            <div>
+              <Label className="studio-appearance-label text-xs">URL de la imagen</Label>
+              <Input
+                value={coverImageUrl}
+                onChange={(e) => onCoverImageUrlChange(e.target.value)}
+                className="studio-appearance-input mt-1 h-9"
+                placeholder="https://… o data:image/…"
+              />
+            </div>
+            {hasCover ? (
+              <div className="overflow-hidden rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)]">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={coverImageUrl.trim()}
+                  alt="Vista previa de portada"
+                  className="h-28 w-full object-cover"
+                />
+                <div className="flex justify-end border-t border-[var(--studio-border)] px-2 py-1.5">
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-[var(--studio-fg-muted)] hover:text-[var(--studio-fg)]"
+                    onClick={() => onCoverImageUrlChange("")}
+                  >
+                    Quitar portada
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </StudioCollapsibleSection>
 

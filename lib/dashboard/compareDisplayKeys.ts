@@ -140,25 +140,28 @@ export function getCompareColumnKeys(
   if (spec.kind === "fixed") {
     const delta = `${k}_vs_fijo`;
     const dp = `${k}_var_pct_fijo`;
+    const ref = `${k}_fijo`;
     return {
       resolvedMetricKey: k,
-      referenceKey: null,
+      referenceKey: ref,
       deltaKey: delta,
       deltaPctKey: dp,
-      referenceSeriesKey: null,
-      tableExtraKeys: [delta, dp].filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
+      referenceSeriesKey: ref,
+      tableExtraKeys: [ref, delta, dp].filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
     };
   }
 
   if (spec.kind === "column") {
     const delta = `${k}_vs_col`;
     const dp = `${k}_delta_pct_col`;
+    const refCol = String(spec.refColumn ?? "").trim();
+    const refResolved = refCol ? resolveRowColumnKey(row, refCol) : null;
     return {
       resolvedMetricKey: k,
-      referenceKey: null,
+      referenceKey: refResolved,
       deltaKey: delta,
       deltaPctKey: dp,
-      referenceSeriesKey: null,
+      referenceSeriesKey: refResolved,
       tableExtraKeys: [delta, dp].filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
     };
   }
@@ -166,13 +169,14 @@ export function getCompareColumnKeys(
   if (spec.kind === "average") {
     const delta = `${k}_vs_prom`;
     const dp = `${k}_delta_pct_prom`;
+    const ref = `${k}_prom`;
     return {
       resolvedMetricKey: k,
-      referenceKey: null,
+      referenceKey: ref,
       deltaKey: delta,
       deltaPctKey: dp,
-      referenceSeriesKey: null,
-      tableExtraKeys: [delta, dp].filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
+      referenceSeriesKey: ref,
+      tableExtraKeys: [ref, delta, dp].filter((col) => Object.prototype.hasOwnProperty.call(row, col)),
     };
   }
 

@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
-import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
+import {
+  buildAggregationFilterSqlClause,
+  normalizeAggregationFilterOperator,
+} from "@/lib/dashboard/buildAggregationFilterSql";
 
 interface Filter {
   field: string;
@@ -31,6 +34,17 @@ const ALLOWED_OPERATORS = new Set([
   "BETWEEN",
   "IS",
   "IS NOT",
+  "CONTAINS",
+  "NOT_CONTAINS",
+  "STARTS_WITH",
+  "ENDS_WITH",
+  "EXACT",
+  "MONTH",
+  "YEAR",
+  "DAY",
+  "YEAR_MONTH",
+  "QUARTER",
+  "SEMESTER",
 ]);
 
 export async function POST(
@@ -162,38 +176,14 @@ export async function POST(
         .filter((f: any) => f.field && f.operator)
         .map((f: any) => {
           const fld = fieldToPhysical(f.field!).replace(/"/g, '""');
-          const op = (f.operator || "=").toUpperCase().trim();
-          if (!ALLOWED_OPERATORS.has(op)) {
+          const op = normalizeAggregationFilterOperator(f.operator);
+          if (!ALLOWED_OPERATORS.has(op) && !/^[<>!=]+$/.test(op)) {
             throw new Error(`Operador no permitido: ${op}`);
           }
-          if (op === "IN") {
-            const arr = Array.isArray(f.value) ? f.value : [];
-            const list = arr.map((x: any) => toSqlLiteral(x)).join(", ");
-            if (!list) return "TRUE";
-            return `"${fld}" IN (${list})`;
-          }
-          if (op === "BETWEEN") {
-            let from: any;
-            let to: any;
-            if (Array.isArray(f.value)) {
-              [from, to] = f.value;
-            } else if (f.value && typeof f.value === "object") {
-              from = (f.value as any).from ?? (f.value as any).start;
-              to = (f.value as any).to ?? (f.value as any).end;
-            }
-            if (typeof from === "undefined" || typeof to === "undefined") {
-              throw new Error(
-                `Filtro BETWEEN requiere 'from' y 'to' para el campo ${fld}`
-              );
-            }
-            return `"${fld}" BETWEEN ${toSqlLiteral(from)} AND ${toSqlLiteral(
-              to
-            )}`;
-          }
-          if ((op === "IS" || op === "IS NOT") && f.value === null) {
-            return `"${fld}" ${op} NULL`;
-          }
-          return `"${fld}" ${op} ${toSqlLiteral(f.value)}`;
+          return buildAggregationFilterSqlClause(
+            { field: f.field, operator: op, value: f.value },
+            { fieldExpression: `"${fld}"` }
+          );
         })
         .join(" AND ");
       if (whereClauses) query += ` WHERE ${whereClauses}`;

@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { LayoutDashboard, Send, Trash2, Undo2, MoreHorizontal, Share2 } from "lucide-react";
@@ -14,6 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { isDashboardCustomCoverUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 // Layout guardado (widgets con posición/span) para previsualización en la tarjeta
 export type DashboardLayoutPreview = {
@@ -46,7 +46,7 @@ export interface Dashboard {
   ownerId?: string;
   /** Nombre del cliente (p. ej. en vista VIEWER agrupada por empresa) */
   clientLabel?: string;
-  /** Si existe, se muestra la previsualización del layout en lugar de la imagen por defecto */
+  /** Si existe y no hay portada custom, se muestra mini-preview del layout */
   layout?: DashboardLayoutPreview | null;
 }
 
@@ -81,7 +81,9 @@ export default function DashboardCard({
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const activePageId = layout?.activePageId ?? layout?.pages?.[0]?.id;
+  const hasCustomCover = isDashboardCustomCoverUrl(imageUrl);
   const hasLayoutPreview =
+    !hasCustomCover &&
     Array.isArray(layout?.widgets) &&
     layout.widgets.some((w) => !activePageId || w.pageId === activePageId);
 
@@ -121,15 +123,15 @@ export default function DashboardCard({
           className="block"
         >
           <div className="relative h-[193px] w-full overflow-hidden bg-[var(--platform-bg)]">
-            {hasLayoutPreview ? (
-              <DashboardCardMiniPreview dashboardId={id} layout={layout!} />
-            ) : imageUrl && imageUrl !== "/Image.svg" ? (
-              <Image
+            {hasCustomCover ? (
+              // eslint-disable-next-line @next/next/no-img-element -- portadas pueden ser cualquier URL externa
+              <img
                 src={imageUrl}
                 alt={`Vista previa de ${title}`}
-                fill
-                className="object-cover"
+                className="absolute inset-0 h-full w-full object-cover"
               />
+            ) : hasLayoutPreview ? (
+              <DashboardCardMiniPreview dashboardId={id} layout={layout!} />
             ) : (
               <div
                 className="flex h-full w-full flex-col items-center justify-center gap-2 p-4"

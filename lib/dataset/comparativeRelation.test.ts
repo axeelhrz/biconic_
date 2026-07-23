@@ -139,7 +139,9 @@ describe("validateComparativeCompare", () => {
     id: "r1",
     name: "Presupuesto",
     comparativeDatasetId: "ds-2",
-    fieldMappings: [{ id: "m1", comparativeColumn: "mes", baseColumn: "fecha", baseDateTransform: "month" }],
+    fieldMappings: [
+      { id: "m1", comparativeColumn: "mes", baseColumn: "fecha", baseDateTransform: "month" as const },
+    ],
     comparisonLevel: ["fecha"],
     comparativeFields: [{ column: "meta", valueType: "absolute" as const }],
   };

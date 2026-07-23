@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   DASHBOARD_GRID_COLUMN_COUNT,
   DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
+  packColGapPxStudio,
   packRowGapPxClient,
   packRowGapPxStudio,
 } from "@/lib/dashboard/gridLayout";
@@ -25,17 +26,23 @@ export function packColumnCountClient(width: number): number {
 export type DashboardPackLayout = {
   packCols: number;
   packRowGapPx: number;
+  packColGapPx: number;
 };
 
 export function useDashboardPackLayout(variant: "studio" | "client"): DashboardPackLayout {
   const [layout, setLayout] = useState<DashboardPackLayout>(() => {
     if (typeof window === "undefined") {
-      return { packCols: DASHBOARD_GRID_COLUMN_COUNT, packRowGapPx: DASHBOARD_GRID_ROW_GAP_PX_DEFAULT };
+      return {
+        packCols: DASHBOARD_GRID_COLUMN_COUNT,
+        packRowGapPx: DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
+        packColGapPx: 24,
+      };
     }
     const w = window.innerWidth;
     return {
       packCols: variant === "studio" ? packColumnCountStudio(w) : packColumnCountClient(w),
       packRowGapPx: variant === "studio" ? packRowGapPxStudio(w) : packRowGapPxClient(w),
+      packColGapPx: packColGapPxStudio(w),
     };
   });
 
@@ -47,6 +54,7 @@ export function useDashboardPackLayout(variant: "studio" | "client"): DashboardP
       setLayout({
         packCols: variant === "studio" ? packColumnCountStudio(w) : packColumnCountClient(w),
         packRowGapPx: variant === "studio" ? packRowGapPxStudio(w) : packRowGapPxClient(w),
+        packColGapPx: packColGapPxStudio(w),
       });
     };
 

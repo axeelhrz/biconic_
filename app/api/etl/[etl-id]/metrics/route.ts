@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import type { Json } from "@/lib/supabase/database.types";
 import { createClient } from "@/lib/supabase/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
+import {
+  findDuplicateNameWithinList,
+  findDuplicateSavedMetricName,
+} from "@/lib/dashboard/savedMetricNames";
 
 function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
   return supabase.auth.getUser().then(({ data: { user }, error }: any) => {
@@ -125,15 +129,65 @@ export async function PUT(
     const dashboardFilters = body.dashboardFilters !== undefined && Array.isArray(body.dashboardFilters) ? body.dashboardFilters : undefined;
     const savedAnalyses = body.savedAnalyses !== undefined && Array.isArray(body.savedAnalyses) ? body.savedAnalyses : undefined;
 
+    if (savedMetrics !== undefined) {
+      const dupInList = findDuplicateNameWithinList(
+        savedMetrics as Array<{ id?: string; name?: string }>
+      );
+      if (dupInList) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: `Ya existe una métrica con el nombre «${dupInList}» en este dataset. Elegí otro nombre.`,
+          },
+          { status: 409 }
+        );
+      }
+    }
+
     const adminClient = createServiceRoleClient();
     const { data: etlRow, error: fetchError } = await adminClient
       .from("etl")
-      .select("layout")
+      .select("layout, client_id")
       .eq("id", etlId)
       .single();
 
     if (fetchError || !etlRow) {
       return NextResponse.json({ ok: false, error: "ETL no encontrado" }, { status: 404 });
+    }
+
+    if (savedMetrics !== undefined) {
+      const clientId = (etlRow as { client_id?: string | null }).client_id ?? null;
+      if (clientId) {
+        const { data: siblingEtls, error: siblingErr } = await adminClient
+          .from("etl")
+          .select("id, title, layout")
+          .eq("client_id", clientId)
+          .neq("id", etlId);
+        if (!siblingErr && Array.isArray(siblingEtls)) {
+          for (const m of savedMetrics as Array<{ id?: string; name?: string }>) {
+            const name = String(m?.name ?? "").trim();
+            if (!name) continue;
+            for (const sibling of siblingEtls) {
+              const layout = (sibling as { layout?: { saved_metrics?: unknown[] } }).layout;
+              const otherMetrics = Array.isArray(layout?.saved_metrics)
+                ? (layout.saved_metrics as Array<{ id?: string; name?: string }>)
+                : [];
+              const clash = findDuplicateSavedMetricName(otherMetrics, name, null);
+              if (clash) {
+                const siblingTitle =
+                  String((sibling as { title?: string }).title ?? "").trim() || "otro dataset";
+                return NextResponse.json(
+                  {
+                    ok: false,
+                    error: `Ya existe una métrica «${name}» en el cliente (dataset «${siblingTitle}»). No se permiten nombres duplicados.`,
+                  },
+                  { status: 409 }
+                );
+              }
+            }
+          }
+        }
+      }
     }
 
     const currentLayout = (etlRow as { layout?: Record<string, unknown> })?.layout ?? {};

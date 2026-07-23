@@ -55,7 +55,7 @@ function AdminDashboardContent() {
                 Dashboards
               </h1>
               <p className="mt-1 text-sm sm:text-base max-w-xl" style={{ color: "var(--platform-fg-muted)" }}>
-                Creá y gestioná tableros por cliente. Conectá fuentes de datos (ETLs) y construí reportes con branding propio.
+                Creá y gestioná tableros por cliente. Conectá un dataset del cliente y construí reportes con branding propio.
               </p>
             </div>
           </div>

@@ -95,8 +95,15 @@ export function isArgentinaDefaultCountry(mapDefaultCountry: string | undefined)
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .trim()
-    .toLowerCase();
-  return n === "argentina" || n === "ar";
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "");
+  return (
+    n === "argentina" ||
+    n === "ar" ||
+    n === "arg" ||
+    n === "republicaargentina" ||
+    n === "republicargentina"
+  );
 }
 
 /** Colapsa a clave comparable (sin espacios ni acentos). */
@@ -167,7 +174,109 @@ const SYNONYM_TO_NORM: Record<string, string> = {
   tierradelfuegoais: "tierradelfuego",
   santiagodelestero: "santiagodelestero",
   santiagodel: "santiagodelestero",
+  /** ISO 3166-2:AR (sin guión) + códigos INDEC habituales. */
+  arb: "buenosaires",
+  arc: "ciudaddebuenosaires",
+  ark: "catamarca",
+  arh: "chaco",
+  aru: "chubut",
+  arx: "cordoba",
+  arw: "corrientes",
+  are: "entrerios",
+  arp: "formosa",
+  ary: "jujuy",
+  arl: "lapampa",
+  arf: "larioja",
+  arm: "mendoza",
+  arn: "misiones",
+  arq: "neuquen",
+  arr: "rionegro",
+  ara: "salta",
+  arj: "sanjuan",
+  ard: "sanluis",
+  arz: "santacruz",
+  ars: "santafe",
+  arg: "santiagodelestero",
+  arv: "tierradelfuego",
+  art: "tucuman",
+  "02": "ciudaddebuenosaires",
+  "06": "buenosaires",
+  "10": "catamarca",
+  "14": "cordoba",
+  "18": "corrientes",
+  "22": "chaco",
+  "26": "chubut",
+  "30": "entrerios",
+  "34": "formosa",
+  "38": "jujuy",
+  "42": "lapampa",
+  "46": "larioja",
+  "50": "mendoza",
+  "54": "misiones",
+  "58": "neuquen",
+  "62": "rionegro",
+  "66": "salta",
+  "70": "sanjuan",
+  "74": "sanluis",
+  "78": "santacruz",
+  "82": "santafe",
+  "86": "santiagodelestero",
+  "90": "tucuman",
+  "94": "tierradelfuego",
 };
+
+/** Prefijos habituales en datasets: "Provincia de Córdoba", "Pcia. Mendoza", etc. */
+const PROVINCE_PREFIX_RE =
+  /^(?:provincia|pcia|prov|departamento|dpto|dto)(?:\s*(?:de|del|de\s+la|de\s+los))?\s+/i;
+
+for (const id of AR_PROVINCE_GADM_IDS) {
+  const n = idToNorm[id]!;
+  const autoPrefixes = [
+    `provincia${n}`,
+    `provinciade${n}`,
+    `provinciadel${n}`,
+    `pcia${n}`,
+    `pciade${n}`,
+    `prov${n}`,
+    `provde${n}`,
+  ];
+  for (const p of autoPrefixes) {
+    if (!SYNONYM_TO_NORM[p]) SYNONYM_TO_NORM[p] = n;
+  }
+}
+
+function lookupNormKey(key: string): ArProvinceGadmId | null {
+  if (!key) return null;
+  const viaSyn = SYNONYM_TO_NORM[key];
+  if (viaSyn) return normToId.get(viaSyn) ?? null;
+  return normToId.get(key) ?? null;
+}
+
+/**
+ * Match por contención cuando el texto incluye el nombre de provincia (o al revés),
+ * eligiendo la coincidencia más larga y única para evitar "San" → San Juan/San Luis.
+ */
+function resolveByContainment(key: string): ArProvinceGadmId | null {
+  if (key.length < 4) return null;
+  let best: { id: ArProvinceGadmId; score: number } | null = null;
+  let ties = 0;
+  for (const id of AR_PROVINCE_GADM_IDS) {
+    const n = idToNorm[id]!;
+    if (n.length < 4) continue;
+    let score = 0;
+    if (key === n) score = n.length + 100;
+    else if (key.includes(n)) score = n.length;
+    else if (n.includes(key) && key.length >= 5) score = key.length;
+    else continue;
+    if (!best || score > best.score) {
+      best = { id, score };
+      ties = 1;
+    } else if (score === best.score && id !== best.id) {
+      ties += 1;
+    }
+  }
+  return ties === 1 && best ? best.id : null;
+}
 
 /**
  * Resuelve texto de fila (provincia en datos) al `properties.id` del GeoJSON, o null.
@@ -177,23 +286,53 @@ export function resolveArProvinceGadmId(raw: unknown): ArProvinceGadmId | null {
   const s = String(raw).trim();
   if (!s) return null;
 
-  let key = normalizeArProvinceKey(s);
+  const key = normalizeArProvinceKey(s);
   if (!key) return null;
 
-  const viaSyn = SYNONYM_TO_NORM[key];
-  if (viaSyn) {
-    const id = normToId.get(viaSyn);
-    return id ?? null;
-  }
-
-  const direct = normToId.get(key);
+  const direct = lookupNormKey(key);
   if (direct) return direct;
 
-  // "Buenos Aires, Argentina" → primera parte
+  // "Buenos Aires, Argentina" / "Tierra del Fuego, Antártida…" → primera parte
   const first = s.split(",")[0]?.trim();
   if (first && first !== s) {
-    return resolveArProvinceGadmId(first);
+    const viaFirst = resolveArProvinceGadmId(first);
+    if (viaFirst) return viaFirst;
   }
 
+  // Quitar "Provincia de …" / "Pcia. …" y reintentar
+  const strippedLabel = s.replace(PROVINCE_PREFIX_RE, "").trim();
+  if (strippedLabel && strippedLabel !== s) {
+    const viaStrip = resolveArProvinceGadmId(strippedLabel);
+    if (viaStrip) return viaStrip;
+  }
+
+  const contained = resolveByContainment(key);
+  if (contained) return contained;
+
   return null;
+}
+
+/**
+ * Heurística: ¿las etiquetas de dimensión parecen provincias argentinas?
+ * Sirve para activar coropleta aunque `mapDefaultCountry` no esté seteado (dashboards migrados).
+ */
+export function rowsSuggestArgentinaProvinces(
+  labels: Iterable<unknown>,
+  options?: { minHits?: number; minRatio?: number; sampleLimit?: number }
+): boolean {
+  const minHits = options?.minHits ?? 3;
+  const minRatio = options?.minRatio ?? 0.35;
+  const sampleLimit = options?.sampleLimit ?? 48;
+  let checked = 0;
+  let hits = 0;
+  for (const raw of labels) {
+    if (checked >= sampleLimit) break;
+    if (raw == null) continue;
+    const s = String(raw).trim();
+    if (!s) continue;
+    checked += 1;
+    if (resolveArProvinceGadmId(s)) hits += 1;
+  }
+  if (checked === 0) return false;
+  return hits >= minHits || hits / checked >= minRatio;
 }

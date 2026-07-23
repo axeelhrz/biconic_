@@ -23,7 +23,8 @@ export function DashboardFiscalYearSection({
     <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] p-3">
       <Label className="text-xs font-semibold text-[var(--studio-fg)]">Año fiscal</Label>
       <p className="text-[11px] text-[var(--studio-fg-muted)]">
-        Define en qué mes comienza el año fiscal. Afecta acumulados YTD y comparaciones acumuladas del dashboard.
+        Define en qué mes comienza el año fiscal. Afecta gráficos con fechas agrupados por año, trimestre o
+        semestre, además de acumulados YTD y comparaciones acumuladas.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <Label htmlFor="dash-fiscal-start-month" className="text-[11px] text-[var(--studio-fg-muted)] shrink-0">

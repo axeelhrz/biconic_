@@ -23,6 +23,11 @@ import { resolveEffectiveCompareSpec, resolveWidgetCompareUi } from "@/lib/dashb
 import { getEffectiveDashboardCompareUi } from "@/lib/dashboard/ensureDashboardCompareUi";
 import type { DashboardCompareDefaults } from "@/types/dashboard";
 import type { ChartStyleConfig } from "@/lib/dashboard/chartOptions";
+import {
+  DASHBOARD_CARD_SPAN_PRESETS,
+  dashboardCardHeightPresets,
+  DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
+} from "@/lib/dashboard/gridLayout";
 
 export type MetricBlockState = "estable" | "alerta" | "cambio";
 
@@ -44,25 +49,8 @@ export type ChartConfig = {
   }>;
 };
 
-const HEIGHT_OPTIONS = [
-  { value: 200, label: "Mínima (200px)" },
-  { value: 280, label: "Compacta (280px)" },
-  { value: 360, label: "Mediana (360px)" },
-  { value: 440, label: "Grande (440px)" },
-  { value: 520, label: "Extra grande (520px)" },
-  { value: 600, label: "Muy grande (600px)" },
-  { value: 720, label: "Alta (720px)" },
-  { value: 900, label: "Máxima (900px)" },
-] as const;
-
-const SPAN_OPTIONS = [
-  { value: 1, label: "1 columna" },
-  { value: 2, label: "2 columnas" },
-  { value: 3, label: "3 columnas" },
-  { value: 4, label: "4 columnas" },
-  { value: 5, label: "5 columnas" },
-  { value: 6, label: "6 columnas (ancho completo)" },
-] as const;
+const SPAN_OPTIONS = DASHBOARD_CARD_SPAN_PRESETS;
+const HEIGHT_OPTIONS = dashboardCardHeightPresets(DASHBOARD_GRID_ROW_GAP_PX_DEFAULT);
 
 type MetricBlockProps = {
   id: string;
@@ -350,15 +338,15 @@ export function MetricBlock({
                     ))}
                   </div>
                   <div className="px-2 py-1">
-                    <p className="mb-1.5 px-1.5 text-[11px] text-[var(--studio-fg-muted)]">Alto (px)</p>
+                    <p className="mb-1.5 px-1.5 text-[11px] text-[var(--studio-fg-muted)]">Alto</p>
                     {HEIGHT_OPTIONS.map((opt) => (
                       <DropdownMenuItem
-                        key={opt.value}
+                        key={opt.minHeight}
                         className="metric-block-dropdown-item flex items-center justify-between rounded-lg px-3 py-2 mx-0.5 text-sm text-[var(--studio-fg)] focus:bg-[var(--studio-accent-dim)] focus:text-[var(--studio-accent)]"
-                        onClick={(e) => { e.stopPropagation(); onSizeChange({ minHeight: opt.value }); }}
+                        onClick={(e) => { e.stopPropagation(); onSizeChange({ minHeight: opt.minHeight }); }}
                       >
                         {opt.label}
-                        {minHeight === opt.value && <span className="text-[var(--studio-accent)] font-medium">✓</span>}
+                        {minHeight === opt.minHeight && <span className="text-[var(--studio-accent)] font-medium">✓</span>}
                       </DropdownMenuItem>
                     ))}
                   </div>

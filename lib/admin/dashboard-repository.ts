@@ -3,6 +3,7 @@ import { getInternalDbUrl } from "@/lib/db/internal-db-url";
 import { getServerAuthUser } from "@/lib/supabase/server-backend";
 import type { Dashboard } from "@/components/dashboard/DashboardCard";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
+import { resolveDashboardCoverImageUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 function getSql() {
   return postgres(getInternalDbUrl(), { max: 5 });
@@ -56,7 +57,7 @@ export async function listAdminDashboardsForGridFromDb(): Promise<Dashboard[]> {
     return rows.map((row) => ({
       id: String(row.id),
       title: row.title?.trim() || row.name?.trim() || "Sin título",
-      imageUrl: "/Image.svg",
+      imageUrl: resolveDashboardCoverImageUrl({ layout: row.layout }),
       status: dashboardPublishedStatusFromRow({ published: row.published }),
       description: "",
       views: 0,

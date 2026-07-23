@@ -28,7 +28,12 @@ export function normalizeChartQuickCalc(v?: unknown): ChartQuickCalc {
 }
 
 export function chartQuickCalcUsesPercentDisplay(mode: ChartQuickCalc): boolean {
-  return mode !== "none";
+  return (
+    mode === "percent_total" ||
+    mode === "percent_category" ||
+    mode === "percent_series" ||
+    mode === "percent_dimension"
+  );
 }
 
 export function chartQuickCalcToPercentBasis(mode: ChartQuickCalc): ChartPercentBasis | undefined {

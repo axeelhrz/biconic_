@@ -20,12 +20,18 @@ export type GlobalFilterDistinctInput = {
 };
 
 function isSelectLikeFilter(gf: GlobalFilterDistinctInput): boolean {
+  const inputType = String(gf.inputType ?? "").trim().toLowerCase();
+  const filterType = String(gf.filterType ?? "").trim().toLowerCase();
+  // Campos libres: no pedir distinct.
+  if (inputType === "search" || inputType === "number" || inputType === "text") return false;
   return (
     !!gf.field &&
-    (gf.inputType === "select" ||
-      gf.inputType === "multi" ||
-      gf.filterType === "single" ||
-      gf.filterType === "multi" ||
+    (inputType === "select" ||
+      inputType === "multi" ||
+      // Sin inputType: el default del dashboard es lista desplegable.
+      inputType === "" ||
+      filterType === "single" ||
+      filterType === "multi" ||
       // Filtros de fecha temporales también necesitan distinct (AÑO, MES, …).
       isDashboardDateFilterOperator(gf.operator))
   );

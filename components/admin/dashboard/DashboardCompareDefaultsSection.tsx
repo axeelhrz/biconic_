@@ -111,9 +111,8 @@ export function DashboardCompareDefaultsSection({
                 ? contextPreview.compareLabel
                   ? `Contexto: ${contextPreview.compareLabel}`
                   : "Contexto comparativo listo según filtros activos."
-                : contextPreview.unavailableReason === "Sin período disponible"
-                  ? "Agregá un filtro de año o rango de fechas en el dashboard para activar la comparación."
-                  : (contextPreview.unavailableReason ?? "Sin período disponible con los filtros actuales.")}
+                : contextPreview.unavailableReason ??
+                  "Agregá el nivel temporal necesario (año / mes / día según la comparación) en los filtros del dashboard."}
             </p>
           ) : null}
         </>

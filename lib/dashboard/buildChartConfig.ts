@@ -13,6 +13,7 @@ import {
   type ParseDateLikeOptions,
 } from "@/lib/dashboard/dateFormatting";
 import { appendCompareLineDatasetsIfConfigured } from "@/lib/dashboard/compareChartMerge";
+import { resolveChartMetricYAxisId } from "@/lib/dashboard/chartMetricAxis";
 import {
   isAttributeResultKey,
   metricChartNumericValue,
@@ -47,6 +48,8 @@ export type ChartConfig = {
     fill?: boolean;
     type?: "bar" | "line";
     yAxisID?: string;
+    /** Línea discontinua (serie de comparación / objetivo). */
+    borderDash?: number[];
   }>;
 };
 
@@ -89,6 +92,8 @@ export type BuildChartConfigWidget = {
     chartSortBy?: string;
     chartSortByMetric?: string;
     chartAxisOrder?: string;
+    /** Orden SQL / studio: tiene prioridad sobre chartSort* y reorden temporal automático. */
+    orderBy?: { field?: string; direction?: "ASC" | "DESC" | string };
     /** DMY = día/mes (default); MDY = mes/día (US) para barras ambiguas `4/1/2024`. */
     dateSlashOrder?: "DMY" | "MDY";
     ratioReuseMode?: boolean;
@@ -356,6 +361,56 @@ function resolveRankingMetricKey(
   return rKey || null;
 }
 
+function resolveOrderBySortField(
+  orderField: string,
+  xKey: string,
+  yKeys: string[],
+  resultKeys: string[]
+): string {
+  const raw = String(orderField ?? "").trim();
+  if (!raw) return yKeys[0] || xKey;
+  if (resultKeys.includes(raw)) return raw;
+  const lower = raw.toLowerCase();
+  const byCase = resultKeys.find((k) => k.toLowerCase() === lower);
+  if (byCase) return byCase;
+  const metricMatch = /^metric_(\d+)$/i.exec(raw);
+  if (metricMatch) {
+    const idx = parseInt(metricMatch[1]!, 10);
+    const resolved = yKeys[idx];
+    if (resolved != null && resultKeys.includes(resolved)) return resolved;
+  }
+  if (raw.toLowerCase() === xKey.toLowerCase()) return xKey;
+  return raw;
+}
+
+function sortRowsByOrderByField(
+  rows: Record<string, unknown>[],
+  sortField: string,
+  direction: string | undefined,
+  xKey: string,
+  dateParseOpts: ParseDateLikeOptions,
+  treatXAsDate: boolean
+): Record<string, unknown>[] {
+  const dir = String(direction ?? "DESC").toUpperCase() === "ASC" ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = a[sortField];
+    const vb = b[sortField];
+    if (sortField === xKey && treatXAsDate) {
+      const ta =
+        parseDateLike(va, dateParseOpts)?.getTime() ??
+        (typeof va === "string" || typeof va === "number" ? new Date(va as string | number).getTime() : NaN);
+      const tb =
+        parseDateLike(vb, dateParseOpts)?.getTime() ??
+        (typeof vb === "string" || typeof vb === "number" ? new Date(vb as string | number).getTime() : NaN);
+      if (!Number.isNaN(ta) && !Number.isNaN(tb)) return (ta - tb) * dir;
+    }
+    const na = Number(va);
+    const nb = Number(vb);
+    if (Number.isFinite(na) && Number.isFinite(nb)) return (na - nb) * dir;
+    return String(va ?? "").localeCompare(String(vb ?? ""), undefined, { numeric: true }) * dir;
+  });
+}
+
 export type RankingSliceResult = {
   rows: Record<string, unknown>[];
   /** Posición 1-indexada en el ranking completo (antes de slice + anclados) por valor crudo del eje X. */
@@ -445,6 +500,16 @@ export function getProcessedRowsForChart(
         rows = sliced.rows;
       }
     }
+  } else if (agg?.orderBy?.field) {
+    const sortField = resolveOrderBySortField(String(agg.orderBy.field), xKey, yKeys, resultKeys);
+    rows = sortRowsByOrderByField(
+      rows,
+      sortField,
+      agg.orderBy.direction,
+      xKey,
+      dateParseOpts,
+      isTemporalXAxis || sortField === xKey
+    );
   } else if (
     !shouldApplyRanking &&
     isTemporalXAxis &&
@@ -569,6 +634,8 @@ function resolveChartLineBorderWidth(agg: BuildChartConfigWidget["aggregationCon
 export type BuildChartConfigOptions = {
   /** Si true, no aplica Top N; útil para totales de porcentaje sobre todo el análisis. */
   skipRanking?: boolean;
+  /** Si true, no aplica cálculo rápido (evita recursión desde el motor de % / denominadores). */
+  skipQuickCalc?: boolean;
   /** Filtros del usuario (pre-expansión) para acotar la suma del KPI. */
   kpiUserTimeScope?: KpiUserTimeScopeOptions | null;
 };
@@ -580,6 +647,7 @@ export function buildChartConfig(
   buildOptions?: BuildChartConfigOptions
 ): ChartConfig | undefined {
   const cfg = buildChartConfigCore(dataArray, widget, accentColor, buildOptions);
+  if (buildOptions?.skipQuickCalc) return cfg;
   return applyChartQuickCalc(cfg, widget, dataArray, accentColor);
 }
 
@@ -781,6 +849,16 @@ function buildChartConfigCore(
         }
       }
     }
+  } else if (agg?.orderBy?.field) {
+    const sortField = resolveOrderBySortField(String(agg.orderBy.field), xKey, yKeys, resultKeys);
+    rows = sortRowsByOrderByField(
+      rows,
+      sortField,
+      agg.orderBy.direction,
+      xKey,
+      dateParseOpts,
+      shouldTreatXAsDate || sortField === xKey
+    );
   } else if (
     !shouldApplyRanking &&
     isTemporalXAxis &&
@@ -962,27 +1040,36 @@ function buildChartConfigCore(
     const y1 = yKeys[1]!;
     const label0 = datasetDisplayLabel(y0);
     const label1 = datasetDisplayLabel(y1);
+    const axis0 = resolveChartMetricYAxisId(y0, 0, agg, resolvedType, yKeys.length) ?? "y";
+    const axis1 = resolveChartMetricYAxisId(y1, 1, agg, resolvedType, yKeys.length) ?? "y1";
     return {
       labels,
       xRawCategoryKeys,
-      datasets: [
-        buildDatasetSeriesFromRows(rows as Record<string, unknown>[], y0, (agg?.metrics ?? []) as AggMetricLike[], label0, {
-          backgroundColor: getColor(y0, 0) + "80",
-          borderColor: getColor(y0, 0),
-          borderWidth: 2,
-          type: "bar",
-          yAxisID: "y",
-          ...barThicknessOptsForCount(labels.length),
-        }),
-        buildDatasetSeriesFromRows(rows as Record<string, unknown>[], y1, (agg?.metrics ?? []) as AggMetricLike[], label1, {
-          backgroundColor: getColor(y1, 1) + "20",
-          borderColor: getColor(y1, 1),
-          borderWidth: lineStrokeW,
-          type: "line",
-          fill: false,
-          yAxisID: "y1",
-        }),
-      ],
+      datasets: appendCompareLineDatasetsIfConfigured(
+        resolvedType,
+        rows,
+        widget,
+        yKeys,
+        [
+          buildDatasetSeriesFromRows(rows as Record<string, unknown>[], y0, (agg?.metrics ?? []) as AggMetricLike[], label0, {
+            backgroundColor: getColor(y0, 0) + "80",
+            borderColor: getColor(y0, 0),
+            borderWidth: 2,
+            type: "bar",
+            yAxisID: axis0,
+            ...barThicknessOptsForCount(labels.length),
+          }),
+          buildDatasetSeriesFromRows(rows as Record<string, unknown>[], y1, (agg?.metrics ?? []) as AggMetricLike[], label1, {
+            backgroundColor: getColor(y1, 1) + "20",
+            borderColor: getColor(y1, 1),
+            borderWidth: lineStrokeW,
+            type: "line",
+            fill: false,
+            yAxisID: axis1,
+          }),
+        ],
+        lineStrokeW
+      ),
     };
   }
 
@@ -1001,14 +1088,21 @@ function buildChartConfigCore(
     return {
       labels,
       xRawCategoryKeys,
-      datasets: [
-        buildDatasetSeriesFromRows(rows as Record<string, unknown>[], yKey, (agg?.metrics ?? []) as AggMetricLike[], displayLabel, {
-          backgroundColor: barColors.map((c) => c + "99"),
-          borderColor: barColors,
-          borderWidth: 2,
-          ...barThicknessOpts,
-        }),
-      ],
+      datasets: appendCompareLineDatasetsIfConfigured(
+        resolvedType,
+        rows,
+        widget,
+        yKeys,
+        [
+          buildDatasetSeriesFromRows(rows as Record<string, unknown>[], yKey, (agg?.metrics ?? []) as AggMetricLike[], displayLabel, {
+            backgroundColor: barColors.map((c) => c + "99"),
+            borderColor: barColors,
+            borderWidth: 2,
+            ...barThicknessOpts,
+          }),
+        ],
+        lineStrokeW
+      ),
     };
   }
   return {
@@ -1024,6 +1118,7 @@ function buildChartConfigCore(
         const isLineLike = resolvedType === "line" || resolvedType === "area";
         const isBarLike =
           resolvedType === "bar" || resolvedType === "horizontalBar" || resolvedType === "stackedColumn";
+        const yAxisID = resolveChartMetricYAxisId(yKey, idx, agg, resolvedType, yKeys.length);
         return buildDatasetSeriesFromRows(
           rows as Record<string, unknown>[],
           yKey,
@@ -1035,6 +1130,7 @@ function buildChartConfigCore(
             borderWidth: isLineLike ? lineStrokeW : 1,
             ...(isBarLike ? barThicknessOpts : {}),
             ...(resolvedType === "area" ? { fill: true } : {}),
+            ...(yAxisID ? { yAxisID } : {}),
           }
         );
       }),

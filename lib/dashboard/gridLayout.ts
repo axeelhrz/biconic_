@@ -28,6 +28,18 @@ export const DASHBOARD_GRID_ROW_GAP_PX_CLIENT = 8;
 /** Default conservador si no se pasa gap (escritorio studio). */
 export const DASHBOARD_GRID_ROW_GAP_PX_DEFAULT = DASHBOARD_GRID_ROW_GAP_PX_STUDIO_WIDE;
 
+/** Column-gap de `.studio-blocks` (rem @ 16px). */
+export const DASHBOARD_GRID_COL_GAP_PX_NARROW = 16; // 1rem
+export const DASHBOARD_GRID_COL_GAP_PX_MID = 20; // 1.25rem
+export const DASHBOARD_GRID_COL_GAP_PX_WIDE = 24; // 1.5rem
+export const DASHBOARD_GRID_COL_GAP_PX_DEFAULT = DASHBOARD_GRID_COL_GAP_PX_WIDE;
+
+export function packColGapPxStudio(innerWidth: number): number {
+  if (innerWidth >= 768) return DASHBOARD_GRID_COL_GAP_PX_WIDE;
+  if (innerWidth >= 640) return DASHBOARD_GRID_COL_GAP_PX_MID;
+  return DASHBOARD_GRID_COL_GAP_PX_NARROW;
+}
+
 export function packRowGapPxStudio(innerWidth: number): number {
   return innerWidth >= 768 ? DASHBOARD_GRID_ROW_GAP_PX_STUDIO_WIDE : DASHBOARD_GRID_ROW_GAP_PX_STUDIO_NARROW;
 }
@@ -48,6 +60,31 @@ export function minRowSpanForMinHeight(
   const ru = Math.max(1, rowUnitPx);
   const g = Math.max(0, rowGapPx);
   return Math.max(1, Math.ceil((mh + g) / (ru + g)));
+}
+
+/** Altura en px de N pistas de fila + gaps (lo que ocupa `grid-row: span N`). */
+export function heightPxForRowSpan(
+  rowSpan: number,
+  rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
+): number {
+  const n = Math.max(1, Math.round(rowSpan));
+  const ru = Math.max(1, rowUnitPx);
+  const g = Math.max(0, rowGapPx);
+  return n * ru + (n - 1) * g;
+}
+
+/**
+ * Ajusta minHeight al múltiplo de la rejilla para que lo guardado = lo que se ve.
+ * Evita que al reabrir el ceil del rowSpan “suba” la tarjeta.
+ */
+export function snapMinHeightToGrid(
+  minHeightPx: number,
+  rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
+): { minHeight: number; rowSpan: number } {
+  const rowSpan = minRowSpanForMinHeight(minHeightPx, rowUnitPx, rowGapPx);
+  return { rowSpan, minHeight: heightPxForRowSpan(rowSpan, rowUnitPx, rowGapPx) };
 }
 
 export function clampGridSpan(raw: number | undefined | null, defaultSpan = 2): number {
@@ -200,23 +237,177 @@ export function findFreeGridCell(
   return { col: candidates[0]!.col, row: candidates[0]!.row };
 }
 
-/** Convierte coordenadas de puntero a celda de rejilla (1-based). */
+/** Convierte coordenadas de puntero a celda de rejilla (1-based), respetando column-gap. */
 export function clientPointToGridCell(
   clientX: number,
   clientY: number,
   containerRect: DOMRect,
   cols: number,
   rowUnitPx: number = DASHBOARD_GRID_ROW_UNIT_PX,
-  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
+  columnGapPx: number = DASHBOARD_GRID_COL_GAP_PX_DEFAULT
 ): { col: number; row: number } {
-  const relX = clientX - containerRect.left;
-  const relY = clientY - containerRect.top;
-  const colWidth = containerRect.width / cols;
+  const relX = Math.max(0, clientX - containerRect.left);
+  const relY = Math.max(0, clientY - containerRect.top);
+  const gapsTotal = Math.max(0, cols - 1) * Math.max(0, columnGapPx);
+  const usableWidth = Math.max(1, containerRect.width - gapsTotal);
+  const colWidth = usableWidth / cols;
+  const stride = colWidth + Math.max(0, columnGapPx);
   const rowStride = rowUnitPx + rowGapPx;
-  const col = Math.max(1, Math.min(cols, Math.floor(relX / colWidth) + 1));
+  const col = Math.max(1, Math.min(cols, Math.floor(relX / stride) + 1));
   const row = Math.max(1, Math.floor(relY / rowStride) + 1);
   return { col, row };
 }
+
+export function fixedGridsOverlap(a: DashboardFixedGrid, b: DashboardFixedGrid): boolean {
+  return (
+    a.col < b.col + b.colSpan &&
+    a.col + a.colSpan > b.col &&
+    a.row < b.row + b.rowSpan &&
+    a.row + a.rowSpan > b.row
+  );
+}
+
+export type ManualDragGridUpdate = { id: string; fixedGrid: DashboardFixedGrid };
+
+/**
+ * Resuelve solapes al soltar una tarjeta en modo manual:
+ * - Si el destino está libre → mueve.
+ * - Si solapa una sola tarjeta → intercambia posiciones (swap).
+ * - Si no → celda libre más cercana.
+ */
+export function resolveManualDragDrop<T extends { id: string; fixedGrid?: DashboardFixedGrid | null }>(
+  widgets: T[],
+  draggedId: string,
+  preferCol: number,
+  preferRow: number,
+  cols: number,
+  originFixedGrid: DashboardFixedGrid
+): ManualDragGridUpdate[] {
+  const dragged = widgets.find((w) => w.id === draggedId);
+  if (!dragged?.fixedGrid) return [];
+
+  const base = clampDashboardFixedGrid(dragged.fixedGrid, cols);
+  const col = Math.max(1, Math.min(cols - base.colSpan + 1, preferCol));
+  const row = Math.max(1, preferRow);
+  const proposed: DashboardFixedGrid = { ...base, col, row };
+  const origin = clampDashboardFixedGrid(originFixedGrid, cols);
+
+  const others = widgets.filter((w) => w.id !== draggedId && w.fixedGrid);
+  const occ = buildOccupancyExcluding(widgets, draggedId, cols);
+
+  if (occ.isFree(proposed.row - 1, proposed.col - 1, proposed.colSpan, proposed.rowSpan)) {
+    if (proposed.col === base.col && proposed.row === base.row) return [];
+    return [{ id: draggedId, fixedGrid: proposed }];
+  }
+
+  const overlapping = others.filter((w) =>
+    fixedGridsOverlap(proposed, clampDashboardFixedGrid(w.fixedGrid!, cols))
+  );
+
+  if (overlapping.length === 1) {
+    const other = overlapping[0]!;
+    const otherFg = clampDashboardFixedGrid(other.fixedGrid!, cols);
+    const otherAtOrigin: DashboardFixedGrid = {
+      ...otherFg,
+      col: Math.max(1, Math.min(cols - otherFg.colSpan + 1, origin.col)),
+      row: origin.row,
+    };
+
+    const occRest = createGridOccupancy(cols);
+    for (const w of others) {
+      if (w.id === other.id) continue;
+      const fg = clampDashboardFixedGrid(w.fixedGrid!, cols);
+      occRest.mark(fg.row - 1, fg.col - 1, fg.colSpan, fg.rowSpan);
+    }
+
+    const draggedOk = occRest.isFree(
+      proposed.row - 1,
+      proposed.col - 1,
+      proposed.colSpan,
+      proposed.rowSpan
+    );
+    const otherOk = occRest.isFree(
+      otherAtOrigin.row - 1,
+      otherAtOrigin.col - 1,
+      otherAtOrigin.colSpan,
+      otherAtOrigin.rowSpan
+    );
+    if (draggedOk && otherOk && !fixedGridsOverlap(proposed, otherAtOrigin)) {
+      return [
+        { id: draggedId, fixedGrid: proposed },
+        { id: other.id, fixedGrid: otherAtOrigin },
+      ];
+    }
+
+    // Swap de anclas cuando no caben con el tamaño del origin.
+    const swapDragged: DashboardFixedGrid = {
+      ...base,
+      col: otherFg.col,
+      row: otherFg.row,
+    };
+    const swapOther: DashboardFixedGrid = {
+      ...otherFg,
+      col: Math.max(1, Math.min(cols - otherFg.colSpan + 1, origin.col)),
+      row: origin.row,
+    };
+    if (!fixedGridsOverlap(swapDragged, swapOther)) {
+      return [
+        { id: draggedId, fixedGrid: clampDashboardFixedGrid(swapDragged, cols) },
+        { id: other.id, fixedGrid: clampDashboardFixedGrid(swapOther, cols) },
+      ];
+    }
+  }
+
+  const cell = findFreeGridCell(occ, proposed.colSpan, proposed.rowSpan, col, row);
+  if (!cell) {
+    if (base.col === origin.col && base.row === origin.row) return [];
+    return [{ id: draggedId, fixedGrid: { ...base, col: origin.col, row: origin.row } }];
+  }
+  if (cell.col === base.col && cell.row === base.row) return [];
+  return [{ id: draggedId, fixedGrid: { ...proposed, col: cell.col, row: cell.row } }];
+}
+
+/**
+ * Presets de alto alineados a la rejilla (rowSpan → px exactos con gap default).
+ * Evita que al elegir "280px" el snap lo convierta en otro valor.
+ */
+export function dashboardCardHeightPresets(
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
+): { rowSpan: number; minHeight: number; label: string }[] {
+  const spans = [3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16];
+  const labels: Record<number, string> = {
+    3: "Muy baja",
+    4: "Baja",
+    5: "Compacta",
+    6: "Mediana",
+    7: "Cómoda",
+    8: "Grande",
+    9: "Muy grande",
+    10: "Alta",
+    12: "Extra alta",
+    14: "Máxima",
+    16: "Hero",
+  };
+  return spans.map((rowSpan) => {
+    const minHeight = heightPxForRowSpan(rowSpan, undefined, rowGapPx);
+    return {
+      rowSpan,
+      minHeight,
+      label: `${labels[rowSpan] ?? `${rowSpan} filas`} (${minHeight}px)`,
+    };
+  });
+}
+
+/** Presets de ancho con etiquetas semánticas (rejilla de 6). */
+export const DASHBOARD_CARD_SPAN_PRESETS: { value: number; label: string }[] = [
+  { value: 1, label: "1/6 — estrecha" },
+  { value: 2, label: "1/3 — KPI / compacta" },
+  { value: 3, label: "1/2 — media" },
+  { value: 4, label: "2/3 — amplia" },
+  { value: 5, label: "5/6 — casi completa" },
+  { value: 6, label: "Ancho completo" },
+];
 
 /** Orden visual (fila, columna) → `gridOrder` para migración manual → auto. */
 export function visualOrderFromFixedGrids<T extends { id: string; fixedGrid?: DashboardFixedGrid | null }>(
@@ -267,7 +458,7 @@ function placeWithSkyline<T extends PackedLayoutWidget>(
   occ: GridOccupancy,
   skyline: number[]
 ): { startRow: number; startCol: number; span: number; rowSpan: number } | null {
-  const span = clampGridSpan(w.gridSpan, 2);
+  const span = Math.min(cols, clampGridSpan(w.gridSpan, 2));
   const rowSpan = minRowSpanForMinHeight(defaultWidgetMinHeight(w), rowUnitPx, rowGapPx);
   let bestRow = Infinity;
   let bestCol = -1;

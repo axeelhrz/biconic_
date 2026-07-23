@@ -276,6 +276,8 @@ function attachFixed(rows: Record<string, unknown>[], metricAliases: string[], f
       const k = resolveRowColumnKey(next, alias);
       if (!k) continue;
       const v = toNum(next[k]);
+      // Serie de objetivo/referencia para gráficos (línea constante).
+      next[`${k}_fijo`] = fixed;
       if (v != null && Number.isFinite(v)) {
         next[`${k}_vs_fijo`] = v - fixed;
         next[`${k}_var_pct_fijo`] = fixed !== 0 ? ((v - fixed) / fixed) * 100 : v === 0 ? 0 : null;
@@ -342,6 +344,7 @@ function attachAverage(
       if (!k) continue;
       const v = toNum(next[k]);
       const mu = meanFor(gk, k);
+      if (mu != null) next[`${k}_prom`] = mu;
       next[`${k}_vs_prom`] = v != null && mu != null ? v - mu : null;
       next[`${k}_delta_pct_prom`] = deltaPct(v, mu);
     }

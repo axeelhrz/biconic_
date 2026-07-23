@@ -226,7 +226,7 @@
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX en lib/dashboard/gridLayout.ts */
-  grid-auto-rows: minmax(56px, auto);
+  grid-auto-rows: 56px;
   row-gap: 0.5rem;
   column-gap: 0.75rem;
   align-items: start;

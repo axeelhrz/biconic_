@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createServiceRoleClient } from "@/lib/supabase/service";
-import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
-import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
+import {
+  buildAggregationFilterSqlClause,
+  normalizeAggregationFilterOperator,
+} from "@/lib/dashboard/buildAggregationFilterSql";
+import { safeNumericCast } from "@/lib/dashboard/coerceNumericSqlExpr";
 
 interface Filter {
   field: string;
@@ -41,6 +44,13 @@ const ALLOWED_OPERATORS = new Set([
   "YEAR",
   "DAY",
   "YEAR_MONTH",
+  "QUARTER",
+  "SEMESTER",
+  "CONTAINS",
+  "NOT_CONTAINS",
+  "STARTS_WITH",
+  "ENDS_WITH",
+  "EXACT",
 ]);
 
 export async function POST(
@@ -135,10 +145,13 @@ export async function POST(
       const whereClauses = body.filters
         .map((f: any) => {
           const safeField = f.field.replace(/"/g, '""');
-          const op = (f.operator || "=").toUpperCase().trim();
+          const op = normalizeAggregationFilterOperator(f.operator);
+          if (!ALLOWED_OPERATORS.has(op) && !/^[<>!=]+$/.test(op)) {
+            return "TRUE";
+          }
 
-          let fieldExpression;
-          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "YEAR_MONTH") {
+          let fieldExpression: string;
+          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "YEAR_MONTH" || op === "QUARTER" || op === "SEMESTER") {
             fieldExpression = `(
               CASE
                 WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, 'DD/MM/YYYY')
@@ -146,44 +159,16 @@ export async function POST(
                 ELSE "${safeField}"::date
               END
             )`;
+          } else if (f.cast === "numeric") {
+            fieldExpression = safeNumericCast(`"${safeField}"`);
           } else {
-            fieldExpression =
-              f.cast === "numeric"
-                ? `"${safeField}"::numeric`
-                : `"${safeField}"`;
+            fieldExpression = `"${safeField}"`;
           }
 
-          if (op === "MONTH") return buildMonthFilterSqlClause(fieldExpression, f.value);
-          if (op === "YEAR_MONTH") return buildMonthFilterSqlClause(fieldExpression, f.value);
-          if (op === "YEAR")
-            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
-          if (op === "DAY") {
-            const dayStr = String(f.value || "").trim();
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) return "TRUE";
-            return `${fieldExpression} = DATE '${dayStr}'`;
-          }
-          if (op === "IN") {
-            const list = (Array.isArray(f.value) ? f.value : [])
-              .map((x: any) => toSqlLiteral(x))
-              .join(", ");
-            if (!list) return "TRUE";
-            return `${fieldExpression} IN (${list})`;
-          }
-          if (op === "BETWEEN") {
-            let from: any, to: any;
-            if (Array.isArray(f.value)) [from, to] = f.value;
-            else if (f.value && typeof f.value === "object") {
-              from = (f.value as any).from;
-              to = (f.value as any).to;
-            }
-            return `${fieldExpression} BETWEEN ${toSqlLiteral(
-              from
-            )} AND ${toSqlLiteral(to)}`;
-          }
-          if ((op === "IS" || op === "IS NOT") && f.value === null)
-            return `"${safeField}" ${op} NULL`;
-
-          return `${fieldExpression} ${op} ${toSqlLiteral(f.value)}`;
+          return buildAggregationFilterSqlClause(
+            { field: f.field, operator: op, value: f.value, cast: f.cast },
+            { fieldExpression }
+          );
         })
         .join(" AND ");
       if (whereClauses) query += ` WHERE ${whereClauses}`;

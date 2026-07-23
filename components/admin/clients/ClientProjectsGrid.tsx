@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import AdminDashboardProjectCard, {
   type Dashboard,
 } from "@/components/admin/dashboard/AdminDashboardProjectCard";
+import { resolveDashboardCoverImageUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 export type ProjectFilter = "todos" | "publicados" | "borradores";
 
@@ -65,7 +66,10 @@ export default function ClientProjectsGrid({
           return {
             id: String(row.id),
             title: row.title ?? "Sin título",
-            imageUrl: row.image_url ?? "/Image.svg",
+            imageUrl: resolveDashboardCoverImageUrl({
+              layout: row.layout,
+              image_url: row.image_url,
+            }),
             status: row.published ? "Publicado" : "Borrador",
             description: row.description ?? "",
             company: clientData?.company_name ?? "Empresa Desconocida",

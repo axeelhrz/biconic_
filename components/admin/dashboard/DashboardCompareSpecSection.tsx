@@ -29,7 +29,7 @@ import { CompareSpecFields } from "@/components/admin/dashboard/CompareSpecField
 const PLACEMENT_OPTIONS: { value: DashboardComparePlacement; label: string }[] = [
   { value: "kpi_below", label: "KPI (bajo el valor)" },
   { value: "table_extra_columns", label: "Tabla (columnas extra)" },
-  { value: "line_reference_series", label: "Línea / área (serie referencia)" },
+  { value: "line_reference_series", label: "Serie comparativa (línea de referencia / objetivo)" },
   { value: "tooltip", label: "Tooltip del gráfico" },
   { value: "detail_card", label: "Tarjeta de detalle" },
 ];
@@ -104,7 +104,13 @@ function previewCompareLineText(
   if (vals.delta == null && vals.deltaPct == null) return null;
   const parts: string[] = [];
   if (vals.delta != null) parts.push(`Δ ${formatValue(vals.delta, "none", "$", "none", 2)}`);
-  if (vals.deltaPct != null) parts.push(`${formatValue(vals.deltaPct, "percent", "$", "none", 1)}`);
+  // deltaPct ya viene en puntos porcentuales (×100); no usar format percent (que vuelve a ×100).
+  if (vals.deltaPct != null) {
+    const sign = vals.deltaPct > 0 ? "+" : "";
+    parts.push(
+      `${sign}${formatValue(vals.deltaPct, "none", "$", "none", 1)}%`
+    );
+  }
   return parts.length ? parts.join(" · ") : null;
 }
 

@@ -19,7 +19,10 @@ import { MapChartAppearanceFields } from "./MapChartAppearanceFields";
 import {
   type DashboardFixedGrid,
   clampGridSpan,
+  DASHBOARD_CARD_SPAN_PRESETS,
+  dashboardCardHeightPresets,
   DASHBOARD_GRID_COLUMN_COUNT,
+  DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
 } from "@/lib/dashboard/gridLayout";
 import type { CompareSpec } from "@/lib/dashboard/compareSpec";
 import type { ContentIconPosition } from "@/components/dashboard/DashboardWidgetRenderer";
@@ -50,6 +53,25 @@ import {
   MetricFormatTableSection,
 } from "@/components/admin/dashboard/MetricDashboardFormatSections";
 import type { KpiUserTimeScopeOptions } from "@/lib/dashboard/kpiFilterScope";
+
+const CARD_HEIGHT_PRESETS = dashboardCardHeightPresets(DASHBOARD_GRID_ROW_GAP_PX_DEFAULT);
+
+function nearestCardHeightPreset(minHeight: number | undefined): number {
+  const target =
+    typeof minHeight === "number" && minHeight > 0
+      ? minHeight
+      : CARD_HEIGHT_PRESETS[2]?.minHeight ?? 280;
+  let best = CARD_HEIGHT_PRESETS[0]!;
+  let bestDist = Math.abs(best.minHeight - target);
+  for (const p of CARD_HEIGHT_PRESETS) {
+    const d = Math.abs(p.minHeight - target);
+    if (d < bestDist) {
+      best = p;
+      bestDist = d;
+    }
+  }
+  return best.minHeight;
+}
 
 export type MetricConditionEdit = {
   field: string;
@@ -121,6 +143,15 @@ export type AggregationConfigEdit = {
   chartRankingPinnedXValues?: string[];
   chartRankingShowRankInLabel?: boolean;
   chartColorScheme?: string;
+  chartScaleMode?: "auto" | "dataset" | "custom" | string;
+  chartScaleMin?: string | number;
+  chartScaleMax?: string | number;
+  chartAxisStep?: string | number;
+  chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
+  chartAxisXReverse?: boolean;
+  chartAxisYReverse?: boolean;
+  chartBarBorderRadius?: number;
+  chartPointRadius?: number;
   showDataLabels?: boolean;
   labelVisibilityMode?: "all" | "auto" | "min_max";
   /** Mapeo valor en datos → texto a mostrar en etiquetas del gráfico (eje X, porciones pie/dona, series por dimensión). */
@@ -128,8 +159,10 @@ export type AggregationConfigEdit = {
   chartDatasetLabelOverrides?: Record<string, string>;
   /** Formato por métrica (clave = chartYAxes key). */
   chartMetricFormats?: Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>;
-  /** Combo: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
+  /** Combo / doble eje: alinear eje derecho con el izquierdo (normalizar 0-1) para comparación visual. */
   chartComboSyncAxes?: boolean;
+  chartDualAxis?: boolean;
+  chartMetricAxis?: Record<string, "left" | "right">;
   chartGridXDisplay?: boolean;
   chartGridYDisplay?: boolean;
   chartGridColor?: string;
@@ -309,6 +342,7 @@ const DIMENSION_DEFAULT_INPUT_TYPES: Array<NonNullable<DimensionDefaultFilterEdi
 
 const OPERATORS = [
   "=", "!=", ">", ">=", "<", "<=",
+  "CONTAINS", "NOT_CONTAINS", "STARTS_WITH", "ENDS_WITH",
   "LIKE", "ILIKE", "IN", "BETWEEN",
   "MONTH", "YEAR", "DAY", "QUARTER", "SEMESTER", "IS", "IS NOT",
 ];
@@ -991,31 +1025,36 @@ export function MetricConfigPanel({
             </div>
 
             <div>
-              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Columnas en grid</Label>
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Ancho en rejilla</Label>
               <select
-                value={Math.min(6, Math.max(1, widget.gridSpan ?? 2))}
+                value={clampGridSpan(widget.gridSpan, 2)}
                 onChange={(e) => onUpdate({ gridSpan: parseInt(e.target.value, 10) })}
                 className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
               >
-                <option value={1}>1</option>
-                <option value={2}>2</option>
-                <option value={3}>3</option>
-                <option value={4}>4</option>
-                <option value={5}>5</option>
-                <option value={6}>6 (ancho completo)</option>
+                {DASHBOARD_CARD_SPAN_PRESETS.map((opt) => (
+                  <option key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </option>
+                ))}
               </select>
             </div>
 
             <div>
-              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Alto mínimo (px)</Label>
-              <Input
-                type="number"
-                min={120}
-                max={2000}
-                value={widget.minHeight ?? 280}
-                onChange={(e) => onUpdate({ minHeight: e.target.valueAsNumber || 280 })}
-                className="mt-1.5 h-9 rounded-lg border-[var(--studio-border)] text-sm"
-              />
+              <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Alto</Label>
+              <select
+                value={nearestCardHeightPreset(widget.minHeight)}
+                onChange={(e) => onUpdate({ minHeight: parseInt(e.target.value, 10) })}
+                className="mt-1.5 w-full h-9 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)] px-3 text-sm"
+              >
+                {CARD_HEIGHT_PRESETS.map((opt) => (
+                  <option key={opt.minHeight} value={opt.minHeight}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-[10px] text-[var(--studio-fg-muted)]">
+                Alturas alineadas a la rejilla ({DASHBOARD_GRID_COLUMN_COUNT} columnas).
+              </p>
             </div>
 
             <div>
@@ -1923,13 +1962,24 @@ export function MetricConfigPanel({
             <div className="mt-1.5 flex items-center gap-2">
               <input
                 type="color"
-                value={widget.color || "#0ea5e9"}
-                onChange={(e) => onUpdate({ color: e.target.value })}
+                value={widget.color || agg.chartPrimaryColor || "#0ea5e9"}
+                onChange={(e) =>
+                  onUpdate({
+                    color: e.target.value,
+                    aggregationConfig: { chartPrimaryColor: e.target.value },
+                  })
+                }
                 className="h-9 w-12 rounded-lg border border-[var(--studio-border)] cursor-pointer"
               />
               <Input
-                value={widget.color || ""}
-                onChange={(e) => onUpdate({ color: e.target.value || undefined })}
+                value={widget.color || agg.chartPrimaryColor || ""}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  onUpdate({
+                    color: v || undefined,
+                    aggregationConfig: { chartPrimaryColor: v || undefined },
+                  });
+                }}
                 className="h-9 flex-1 font-mono text-xs"
                 placeholder="#0ea5e9"
               />
@@ -2075,6 +2125,198 @@ export function MetricConfigPanel({
                 <span className="text-xs text-[var(--studio-fg-muted)]">Mostrar eje Y</span>
               </label>
             </div>
+            <div className="mt-2 flex flex-wrap items-center gap-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!agg.chartAxisXReverse}
+                  onChange={(e) => updateAgg({ chartAxisXReverse: e.target.checked || undefined })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Invertir eje X</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!agg.chartAxisYReverse}
+                  onChange={(e) => updateAgg({ chartAxisYReverse: e.target.checked || undefined })}
+                  className="rounded"
+                />
+                <span className="text-xs text-[var(--studio-fg-muted)]">Invertir eje Y</span>
+              </label>
+            </div>
+          </div>
+        )}
+        {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
+          <div className="space-y-2 rounded-lg border border-[var(--studio-border)] bg-[var(--studio-surface)]/30 p-3">
+            <Label className="text-xs font-medium text-[var(--studio-fg)]">Escala del eje Y</Label>
+            <p className="text-[10px] text-[var(--studio-fg-muted)]">
+              Automática, según datos visibles, o rango personalizado. Los cambios se aplican al instante.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(
+                [
+                  ["auto", "Automática"],
+                  ["dataset", "Según datos"],
+                  ["custom", "Personalizada"],
+                ] as const
+              ).map(([val, lbl]) => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() =>
+                    updateAgg({
+                      chartScaleMode: val === "auto" ? undefined : val,
+                      ...(val !== "custom"
+                        ? { chartScaleMin: undefined, chartScaleMax: undefined }
+                        : {}),
+                    })
+                  }
+                  className="rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors"
+                  style={{
+                    background:
+                      (agg.chartScaleMode || "auto") === val
+                        ? "var(--studio-accent)"
+                        : "var(--studio-bg)",
+                    color:
+                      (agg.chartScaleMode || "auto") === val
+                        ? "var(--studio-bg)"
+                        : "var(--studio-fg-muted)",
+                    borderColor:
+                      (agg.chartScaleMode || "auto") === val
+                        ? "transparent"
+                        : "var(--studio-border)",
+                  }}
+                >
+                  {lbl}
+                </button>
+              ))}
+            </div>
+            {agg.chartScaleMode === "custom" && (
+              <div className="mt-2 flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-2">
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Mín</Label>
+                  <Input
+                    type="number"
+                    value={agg.chartScaleMin ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartScaleMin: e.target.value === "" ? undefined : e.target.value,
+                      })
+                    }
+                    className="h-8 w-24 text-xs"
+                    placeholder="—"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Máx</Label>
+                  <Input
+                    type="number"
+                    value={agg.chartScaleMax ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartScaleMax: e.target.value === "" ? undefined : e.target.value,
+                      })
+                    }
+                    className="h-8 w-24 text-xs"
+                    placeholder="—"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <Label className="text-[11px] text-[var(--studio-fg-muted)]">Graduación (paso)</Label>
+              <Input
+                type="number"
+                value={agg.chartAxisStep ?? ""}
+                onChange={(e) =>
+                  updateAgg({
+                    chartAxisStep: e.target.value === "" ? undefined : e.target.value,
+                  })
+                }
+                className="h-8 w-28 text-xs"
+                placeholder="Automático"
+              />
+            </div>
+            {Array.isArray(agg.chartYAxes) && agg.chartYAxes.length > 1 && (
+              <div className="mt-3 space-y-2 border-t border-[var(--studio-border)] pt-3">
+                <Label className="text-[11px] font-medium text-[var(--studio-fg-muted)]">
+                  Escala por métrica
+                </Label>
+                {agg.chartYAxes.map((key) => {
+                  const per = (agg.chartScalePerMetric ?? {})[key] ?? {};
+                  const label =
+                    (agg.chartDatasetLabelOverrides as Record<string, string> | undefined)?.[key] ??
+                    key;
+                  const updatePer = (upd: { min?: number; max?: number; step?: number }) => {
+                    const next = {
+                      ...(agg.chartScalePerMetric ?? {}),
+                      [key]: { ...per, ...upd },
+                    };
+                    const cleaned = Object.fromEntries(
+                      Object.entries(next).filter(([, v]) =>
+                        v && (v.min != null || v.max != null || v.step != null)
+                      )
+                    ) as Record<string, { min?: number; max?: number; step?: number }>;
+                    updateAgg({
+                      chartScalePerMetric: Object.keys(cleaned).length > 0 ? cleaned : undefined,
+                    });
+                  };
+                  return (
+                    <div
+                      key={key}
+                      className="rounded border border-[var(--studio-border)] bg-[var(--studio-bg)]/40 p-2"
+                    >
+                      <p className="mb-1.5 text-[11px] font-medium text-[var(--studio-fg)]">{label}</p>
+                      <div className="flex flex-wrap gap-2">
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-[var(--studio-fg-muted)]">Mín</span>
+                          <Input
+                            type="number"
+                            value={per.min ?? ""}
+                            onChange={(e) =>
+                              updatePer({
+                                min: e.target.value === "" ? undefined : Number(e.target.value),
+                              })
+                            }
+                            className="h-7 w-20 text-[11px]"
+                            placeholder="—"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-[var(--studio-fg-muted)]">Máx</span>
+                          <Input
+                            type="number"
+                            value={per.max ?? ""}
+                            onChange={(e) =>
+                              updatePer({
+                                max: e.target.value === "" ? undefined : Number(e.target.value),
+                              })
+                            }
+                            className="h-7 w-20 text-[11px]"
+                            placeholder="—"
+                          />
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <span className="text-[10px] text-[var(--studio-fg-muted)]">Paso</span>
+                          <Input
+                            type="number"
+                            value={per.step ?? ""}
+                            onChange={(e) =>
+                              updatePer({
+                                step: e.target.value === "" ? undefined : Number(e.target.value),
+                              })
+                            }
+                            className="h-7 w-16 text-[11px]"
+                            placeholder="—"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
         {isChartTypeIn(CHART_APPEARANCE_CARTESIAN, chartType) && (
@@ -2114,7 +2356,7 @@ export function MetricConfigPanel({
               <p className="text-[10px] leading-snug text-[var(--studio-fg-muted)]">
                 Ancho de las barras, trazo de las líneas de datos y grosor de las líneas de la cuadrícula (no el borde de la tarjeta).
               </p>
-              <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 <div>
                   <Label className="text-[11px] text-[var(--studio-fg-muted)]">Barras — ancho máx. (px)</Label>
                   <Input
@@ -2145,6 +2387,38 @@ export function MetricConfigPanel({
                     }
                     className="mt-0.5 h-8 text-xs"
                     placeholder="2"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Barras — radio (px)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={32}
+                    value={agg.chartBarBorderRadius ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartBarBorderRadius: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="4"
+                  />
+                </div>
+                <div>
+                  <Label className="text-[11px] text-[var(--studio-fg-muted)]">Puntos de línea (px)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={16}
+                    value={agg.chartPointRadius ?? ""}
+                    onChange={(e) =>
+                      updateAgg({
+                        chartPointRadius: e.target.value ? parseInt(e.target.value, 10) : undefined,
+                      })
+                    }
+                    className="mt-0.5 h-8 text-xs"
+                    placeholder="3"
                   />
                 </div>
                 <div>
@@ -2419,17 +2693,84 @@ export function MetricConfigPanel({
         )}
         {!["filter", "image", "text"].includes(widget.type) && Array.isArray(agg.chartYAxes) && agg.chartYAxes.length > 1 && (
           <div className="border-t border-[var(--studio-border)] pt-4 space-y-3">
-            {widget.type === "combo" && (
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={!!agg.chartComboSyncAxes}
-                  onChange={(e) => onUpdate({ aggregationConfig: { chartComboSyncAxes: e.target.checked } })}
-                  className="rounded"
-                />
-                <span className="text-xs text-[var(--studio-fg-muted)]">Sincronizar ejes</span>
-                <span className="text-[10px] text-[var(--studio-fg-muted)]">Alinear el eje derecho con el izquierdo para comparar dos métricas con escalas distintas.</span>
-              </label>
+            {(widget.type === "combo" ||
+              widget.type === "line" ||
+              widget.type === "area" ||
+              widget.type === "bar" ||
+              widget.type === "horizontalBar" ||
+              widget.type === "stackedColumn") && (
+              <div className="space-y-2">
+                {widget.type !== "combo" && (
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={!!agg.chartDualAxis}
+                      onChange={(e) =>
+                        onUpdate({
+                          aggregationConfig: {
+                            chartDualAxis: e.target.checked,
+                            ...(e.target.checked ? {} : { chartComboSyncAxes: false }),
+                          },
+                        })
+                      }
+                      className="rounded"
+                    />
+                    <span className="text-xs text-[var(--studio-fg-muted)]">Doble eje</span>
+                    <span className="text-[10px] text-[var(--studio-fg-muted)]">
+                      Eje izquierdo y derecho cuando hay dos o más métricas.
+                    </span>
+                  </label>
+                )}
+                {(widget.type === "combo" || !!agg.chartDualAxis) && (
+                  <>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={!!agg.chartComboSyncAxes}
+                        onChange={(e) => onUpdate({ aggregationConfig: { chartComboSyncAxes: e.target.checked } })}
+                        className="rounded"
+                      />
+                      <span className="text-xs text-[var(--studio-fg-muted)]">Sincronizar ejes</span>
+                      <span className="text-[10px] text-[var(--studio-fg-muted)]">
+                        Alinear el eje derecho con el izquierdo para comparar escalas distintas.
+                      </span>
+                    </label>
+                    <div className="space-y-1.5 rounded border border-[var(--studio-border)] p-2 bg-[var(--studio-bg)]/40">
+                      <Label className="text-[10px] text-[var(--studio-fg-muted)]">Asignación de eje</Label>
+                      {agg.chartYAxes.map((key, idx) => {
+                        const label =
+                          (agg.metrics?.[idx] as { alias?: string; field?: string } | undefined)?.alias ??
+                          (agg.metrics?.[idx] as { field?: string } | undefined)?.field ??
+                          key;
+                        const side = (agg.chartMetricAxis ?? {})[key] ?? (idx === 0 ? "left" : "right");
+                        return (
+                          <div key={key} className="flex items-center gap-2">
+                            <span className="text-[11px] flex-1 truncate" style={{ color: "var(--studio-fg)" }}>
+                              {label}
+                            </span>
+                            <select
+                              value={side}
+                              onChange={(e) => {
+                                const v = e.target.value === "right" ? "right" : "left";
+                                onUpdate({
+                                  aggregationConfig: {
+                                    chartDualAxis: true,
+                                    chartMetricAxis: { ...(agg.chartMetricAxis ?? {}), [key]: v },
+                                  },
+                                });
+                              }}
+                              className="h-7 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-[11px]"
+                            >
+                              <option value="left">Izquierdo</option>
+                              <option value="right">Derecho</option>
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
             <Label className="text-xs font-medium text-[var(--studio-fg-muted)]">Formato por métrica</Label>
             <p className="text-[11px] text-[var(--studio-fg-muted)]">Asigná tipo y escala a cada métrica del gráfico.</p>
@@ -3216,9 +3557,36 @@ export function MetricConfigPanel({
                   <Label className="text-[11px] text-[var(--studio-fg-muted)]">Ordenar por</Label>
                   <select
                     value={agg.orderBy?.field || ""}
-                    onChange={(e) =>
-                      updateAgg({ orderBy: { field: e.target.value, direction: agg.orderBy?.direction || "DESC" } })
-                    }
+                    onChange={(e) => {
+                      const field = e.target.value;
+                      if (!field) {
+                        updateAgg({
+                          orderBy: undefined,
+                          chartSortDirection: "none",
+                          chartSortBy: undefined,
+                          chartSortByMetric: undefined,
+                        });
+                        return;
+                      }
+                      const direction = agg.orderBy?.direction || "DESC";
+                      const dimCandidates = [
+                        agg.dimension,
+                        agg.dimension2,
+                        agg.dateDimension,
+                        agg.chartXAxis,
+                        ...(Array.isArray(agg.dimensions) ? agg.dimensions : []),
+                      ]
+                        .map((d) => String(d ?? "").trim())
+                        .filter(Boolean);
+                      const isDim = dimCandidates.some((d) => d.toLowerCase() === field.toLowerCase());
+                      updateAgg({
+                        orderBy: { field, direction },
+                        chartSortDirection: direction === "ASC" ? "asc" : "desc",
+                        chartSortBy: isDim ? "dimension" : "metric",
+                        chartSortByMetric: isDim ? undefined : field,
+                        ...(isDim ? {} : { chartAxisOrder: undefined }),
+                      });
+                    }}
                     className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
                   >
                     <option value="">—</option>
@@ -3233,14 +3601,31 @@ export function MetricConfigPanel({
                   <Label className="text-[11px] text-[var(--studio-fg-muted)]">Sentido</Label>
                   <select
                     value={agg.orderBy?.direction || "DESC"}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const direction = e.target.value as "ASC" | "DESC";
+                      const field = agg.orderBy?.field || orderFields[0] || "";
+                      if (!field) {
+                        updateAgg({ orderBy: { field: "", direction } });
+                        return;
+                      }
+                      const dimCandidates = [
+                        agg.dimension,
+                        agg.dimension2,
+                        agg.dateDimension,
+                        agg.chartXAxis,
+                        ...(Array.isArray(agg.dimensions) ? agg.dimensions : []),
+                      ]
+                        .map((d) => String(d ?? "").trim())
+                        .filter(Boolean);
+                      const isDim = dimCandidates.some((d) => d.toLowerCase() === field.toLowerCase());
                       updateAgg({
-                        orderBy: {
-                          field: agg.orderBy?.field || orderFields[0] || "",
-                          direction: e.target.value as "ASC" | "DESC",
-                        },
-                      })
-                    }
+                        orderBy: { field, direction },
+                        chartSortDirection: direction === "ASC" ? "asc" : "desc",
+                        chartSortBy: isDim ? "dimension" : "metric",
+                        chartSortByMetric: isDim ? undefined : field,
+                        ...(isDim ? {} : { chartAxisOrder: undefined }),
+                      });
+                    }}
                     className="mt-0.5 w-full h-8 rounded border border-[var(--studio-border)] bg-[var(--studio-surface)] px-2 text-xs"
                   >
                     <option value="DESC">Desc</option>

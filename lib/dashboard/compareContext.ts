@@ -4,6 +4,7 @@ import { legacyCompareInputFromWidgetAgg } from "@/lib/dashboard/compareDisplayK
 import type { DashboardCompareUi } from "@/lib/dashboard/compareDisplayKeys";
 import { shiftCalendarYearMonth } from "@/lib/dashboard/expandAggregationFiltersForCompare";
 import { parseIsoYearMonthForLabel } from "@/lib/dashboard/dateFormatting";
+import { validateTemporalCompareAgainstFilters } from "@/lib/dashboard/validateTemporalCompareFilters";
 
 export type CompareContextFilter = {
   id?: string;
@@ -27,6 +28,15 @@ export type TemporalAnchor =
   | { kind: "year_month"; field: string; yearMonths: string[] }
   | { kind: "year"; field: string; years: number[] }
   | { kind: "month_only"; field: string; months: number[]; yearField?: string; years?: number[] }
+  | {
+      kind: "day";
+      field: string;
+      days: number[];
+      months?: number[];
+      years?: number[];
+      yearField?: string;
+      monthField?: string;
+    }
   | { kind: "quarter"; field: string; quarters: number[]; years?: number[] }
   | { kind: "semester"; field: string; semesters: number[]; years?: number[] }
   | { kind: "between"; field: string; from: string; to: string };
@@ -127,12 +137,13 @@ function modeNeedsPrevBucket(mode: CompareTemporalMode): boolean {
   );
 }
 
-/** Detecta ancla temporal en filtros activos (FY, YEAR, MONTH, YEAR_MONTH, QUARTER, SEMESTER, BETWEEN, = año). */
+/** Detecta ancla temporal en filtros activos (FY, YEAR, MONTH, DAY, YEAR_MONTH, QUARTER, SEMESTER, BETWEEN, = año). */
 export function extractTemporalAnchor(filters: readonly CompareContextFilter[]): TemporalAnchor | null {
   let fyAnchor: TemporalAnchor | null = null;
   let yearMonthAnchor: { field: string; yearMonths: string[] } | null = null;
   let yearAnchor: { field: string; years: number[] } | null = null;
   let monthOnlyAnchor: { field: string; months: number[] } | null = null;
+  let dayAnchor: { field: string; days: number[] } | null = null;
   let quarterAnchor: { field: string; quarters: number[] } | null = null;
   let semesterAnchor: { field: string; semesters: number[] } | null = null;
   let betweenAnchor: TemporalAnchor | null = null;
@@ -176,6 +187,11 @@ export function extractTemporalAnchor(filters: readonly CompareContextFilter[]):
       if (years.length > 0) yearAnchor = { field, years };
     }
 
+    if (op === "DAY") {
+      const days = collectNumbers(f.value).filter((d) => d >= 1 && d <= 31);
+      if (days.length > 0) dayAnchor = { field, days };
+    }
+
     if (op === "QUARTER") {
       const quarters = collectNumbers(f.value).filter((q) => q >= 1 && q <= 4);
       if (quarters.length > 0) quarterAnchor = { field, quarters };
@@ -205,6 +221,17 @@ export function extractTemporalAnchor(filters: readonly CompareContextFilter[]):
 
   if (fyAnchor) return fyAnchor;
   if (yearMonthAnchor) return { kind: "year_month", ...yearMonthAnchor };
+  if (yearAnchor && monthOnlyAnchor && dayAnchor) {
+    return {
+      kind: "day",
+      field: dayAnchor.field,
+      days: dayAnchor.days,
+      months: monthOnlyAnchor.months,
+      years: yearAnchor.years,
+      yearField: yearAnchor.field,
+      monthField: monthOnlyAnchor.field,
+    };
+  }
   if (yearAnchor && monthOnlyAnchor) {
     return {
       kind: "month_only",
@@ -234,6 +261,7 @@ export function extractTemporalAnchor(filters: readonly CompareContextFilter[]):
   if (quarterAnchor) return { kind: "quarter", ...quarterAnchor };
   if (semesterAnchor) return { kind: "semester", ...semesterAnchor };
   if (monthOnlyAnchor) return { kind: "month_only", field: monthOnlyAnchor.field, months: monthOnlyAnchor.months };
+  if (dayAnchor) return { kind: "day", field: dayAnchor.field, days: dayAnchor.days };
   if (betweenAnchor) return betweenAnchor;
   return null;
 }
@@ -408,6 +436,7 @@ export type BuildDashboardCompareContextsParams = {
 /**
  * Construye contexto actual y comparativo para consulta dual.
  * Regla: mismo contexto de negocio, dimensión temporal desplazada.
+ * Valida el nivel temporal de filtros (año / mes / día) según el modo de comparación.
  */
 export function buildDashboardCompareContexts(params: BuildDashboardCompareContextsParams): DashboardCompareContexts {
   const { filters, compareSpec } = params;
@@ -432,13 +461,27 @@ export function buildDashboardCompareContexts(params: BuildDashboardCompareConte
     };
   }
 
+  if (compareSpec.kind === "temporal" || compareSpec.kind === "cumulative") {
+    const levelCheck = validateTemporalCompareAgainstFilters(compareSpec, currentFilters);
+    if (!levelCheck.ok) {
+      return {
+        currentFilters,
+        comparativeFilters: currentFilters,
+        comparable: false,
+        unavailableReason: levelCheck.reason ?? "Sin período disponible",
+        usesDualQuery: true,
+      };
+    }
+  }
+
   const anchor = extractTemporalAnchor(currentFilters);
   if (!anchor) {
+    const levelCheck = validateTemporalCompareAgainstFilters(compareSpec, currentFilters);
     return {
       currentFilters,
       comparativeFilters: currentFilters,
       comparable: false,
-      unavailableReason: "Sin período disponible",
+      unavailableReason: levelCheck.reason ?? "Sin período disponible",
       usesDualQuery: true,
     };
   }

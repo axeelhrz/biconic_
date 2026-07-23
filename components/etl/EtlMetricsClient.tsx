@@ -37,9 +37,14 @@ import {
   formatDateByGranularity,
   parseDateLike,
   parseIsoYearMonthForLabel,
+  parseMonthYearLabel,
   resolveMonthYearFromAmbiguousSlash,
   type DateGranularity,
 } from "@/lib/dashboard/dateFormatting";
+import {
+  resolveArgmaxDimensionLabel,
+  wantsAttributeDimensionDisplay,
+} from "@/lib/dashboard/metricDisplayRole";
 import type {
   CompareSpec,
   CompareTemporalMode,
@@ -77,6 +82,7 @@ import {
   resolveAnalysisDimensionsFromConfig,
   type SavedAnalysisForMerge,
 } from "@/lib/dashboard/widgetRenderParity";
+import { findDuplicateSavedMetricName } from "@/lib/dashboard/savedMetricNames";
 
 // Reserved for future UI (e.g. aggregate function selector)
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -98,6 +104,7 @@ const FILTER_OPERATOR_OPTIONS = [
   { value: "<", label: "Menor que" },
   { value: "<=", label: "Menor o igual" },
   { value: "CONTAINS", label: "Contiene" },
+  { value: "NOT_CONTAINS", label: "No contiene" },
   { value: "STARTS_WITH", label: "Comienza por" },
   { value: "ENDS_WITH", label: "Termina en" },
   { value: "EXACT", label: "Coincide exactamente" },
@@ -662,6 +669,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [analysisDateFormat, setAnalysisDateFormat] = useState<"short" | "monthYear" | "year" | "datetime">("short");
   /** IDs de métricas guardadas seleccionadas para este análisis (wizard C). Si tiene elementos, el payload usa estas en lugar de formMetrics. */
   const [analysisSelectedMetricIds, setAnalysisSelectedMetricIds] = useState<string[]>([]);
+  /** Análisis: mostrar el número de la métrica o la dimensión asociada al extremo (argmax/argmin). */
+  const [analysisResultDisplayMode, setAnalysisResultDisplayMode] = useState<"number" | "dimension">("number");
+  const [analysisAttributeDimension, setAnalysisAttributeDimension] = useState("");
+  const [analysisAttributePick, setAnalysisAttributePick] = useState<"max" | "min">("max");
   /** En paso B, ratio entre métricas guardadas: IDs de 2+ métricas en orden (metric_0, metric_1, ...). */
   const [formulaFromSavedMetricIds, setFormulaFromSavedMetricIds] = useState<string[]>([]);
   /** Fórmula cuando se usa formulaFromSavedMetricIds (ej. metric_0 / NULLIF(metric_1, 0)). */
@@ -721,6 +732,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   const [labelOverrideRawDrafts, setLabelOverrideRawDrafts] = useState<Record<string, string>>({});
   const [chartMetricFormats, setChartMetricFormats] = useState<Record<string, { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }>>({});
   const [chartComboSyncAxes, setChartComboSyncAxes] = useState(false);
+  const [chartDualAxis, setChartDualAxis] = useState(false);
+  const [chartMetricAxis, setChartMetricAxis] = useState<Record<string, "left" | "right">>({});
   const [chartGridXDisplay, setChartGridXDisplay] = useState(true);
   const [chartGridYDisplay, setChartGridYDisplay] = useState(true);
   const [chartGridColor, setChartGridColor] = useState<string>("");
@@ -869,6 +882,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setChartCategoryColorMode("varied");
     setChartPrimaryColor("#0ea5e9");
     setChartComboSyncAxes(false);
+    setChartDualAxis(false);
+    setChartMetricAxis({});
     setChartGridXDisplay(true);
     setChartGridYDisplay(true);
     setChartGridColor("");
@@ -894,6 +909,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setEditingId(null);
     setEditingSavedAnalysisId(null);
     setAnalysisSelectedMetricIds(opts?.metricIds ?? []);
+    setAnalysisResultDisplayMode("number");
+    setAnalysisAttributeDimension("");
+    setAnalysisAttributePick("max");
     setFormDimensions([]);
     setFormFilters([]);
     setDimensionDefaultFiltersForm([]);
@@ -1464,6 +1482,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         const ymp = parseIsoYearMonthForLabel(value);
         if (ymp) return `${months[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
         if (typeof value === "string") {
+          const labeled = parseMonthYearLabel(value);
+          if (labeled) return `${months[labeled.month - 1] ?? ""} ${labeled.year}`.trim();
           const slashYmp = resolveMonthYearFromAmbiguousSlash(value, parseOpts);
           if (slashYmp) return `${months[slashYmp.month - 1] ?? ""} ${slashYmp.year}`.trim();
         }
@@ -1532,6 +1552,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     setFormMetric({ id: `m-${Date.now()}`, field: "", func: "SUM", alias: "resultado" });
     setCalcType("formula");
     setAnalysisSelectedMetricIds([]);
+    setAnalysisResultDisplayMode("number");
+    setAnalysisAttributeDimension("");
+    setAnalysisAttributePick("max");
     setFormulaFromSavedMetricIds([]);
     setFormulaFromReuseExpr("metric_0 / NULLIF(metric_1, 0)");
     setMetricNameToSave("");
@@ -1670,6 +1693,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       );
       setChartMetricFormats(cfg.chartMetricFormats && typeof cfg.chartMetricFormats === "object" ? cfg.chartMetricFormats : {});
       setChartComboSyncAxes(!!cfg.chartComboSyncAxes);
+      setChartDualAxis(!!(cfg as { chartDualAxis?: boolean }).chartDualAxis);
+      setChartMetricAxis(
+        (cfg as { chartMetricAxis?: Record<string, "left" | "right"> }).chartMetricAxis &&
+          typeof (cfg as { chartMetricAxis?: unknown }).chartMetricAxis === "object"
+          ? ((cfg as { chartMetricAxis: Record<string, "left" | "right"> }).chartMetricAxis)
+          : {}
+      );
       setChartGridXDisplay(cfg.chartGridXDisplay !== false);
       setChartGridYDisplay(cfg.chartGridYDisplay !== false);
       setChartGridColor(typeof cfg.chartGridColor === "string" ? cfg.chartGridColor : "");
@@ -2158,12 +2188,25 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         dimension2: formDimensions[1],
         chartXAxis,
       });
+      const attrDim =
+        useAnalysisConfig &&
+        wantsAttributeDimensionDisplay({
+          resultDisplayMode: analysisResultDisplayMode,
+          resultAttributeDimension: analysisAttributeDimension,
+        })
+          ? String(analysisAttributeDimension).trim()
+          : "";
+      const dimsForRequest = (() => {
+        const base = [...(effectiveDims.dimensions ?? [])].filter((d) => typeof d === "string" && d.trim() !== "");
+        if (attrDim && !base.some((d) => d === attrDim)) base.push(attrDim);
+        return base;
+      })();
       const body: Record<string, unknown> = {
         tableName,
         etlId,
-        dimensions: effectiveDims.dimensions.length > 0 ? effectiveDims.dimensions : undefined,
-        dimension: effectiveDims.dimension,
-        dimension2: effectiveDims.dimension2,
+        dimensions: dimsForRequest.length > 0 ? dimsForRequest : undefined,
+        dimension: dimsForRequest[0] ?? effectiveDims.dimension,
+        dimension2: dimsForRequest[1] ?? effectiveDims.dimension2,
         metrics: metricsPayload,
         filters: filtersForRequest.length > 0 ? filtersForRequest : undefined,
         orderBy: formOrderBy?.field
@@ -2264,6 +2307,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     propDatasetId,
     tableNameForPreview,
     formDimensions,
+    analysisResultDisplayMode,
+    analysisAttributeDimension,
     effectiveFormMetrics,
     formFilters,
     formOrderBy,
@@ -2575,6 +2620,42 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     ratioReuseResultMetricIndex,
   ]);
 
+  const previewKpiMetricKey = useMemo(() => {
+    const lastIdx =
+      ratioReuseDisplayMode && ratioReuseResultMetricIndex >= 0
+        ? ratioReuseResultMetricIndex
+        : Math.max(0, effectiveFormMetrics.length - 1);
+    const lastM = effectiveFormMetrics[lastIdx];
+    if (Array.isArray(chartYAxes) && chartYAxes.length > 0 && chartYAxes[0]) return String(chartYAxes[0]);
+    return lastM ? aggregationResultColumnKey(lastM, lastIdx) : `metric_${lastIdx}`;
+  }, [effectiveFormMetrics, chartYAxes, ratioReuseDisplayMode, ratioReuseResultMetricIndex]);
+
+  const previewShowsAttributeDimension = wantsAttributeDimensionDisplay({
+    resultDisplayMode: analysisResultDisplayMode,
+    resultAttributeDimension: analysisAttributeDimension,
+  });
+
+  const previewKpiDisplayText = useMemo(() => {
+    if (!previewData || previewData.length === 0) return "—";
+    if (previewShowsAttributeDimension) {
+      return resolveArgmaxDimensionLabel(
+        previewData as Record<string, unknown>[],
+        previewKpiMetricKey,
+        analysisAttributeDimension,
+        analysisAttributePick
+      );
+    }
+    return previewKpiValue != null ? formatNumber(previewKpiValue) : "—";
+  }, [
+    previewData,
+    previewShowsAttributeDimension,
+    previewKpiMetricKey,
+    analysisAttributeDimension,
+    analysisAttributePick,
+    previewKpiValue,
+    formatNumber,
+  ]);
+
   const previewWidgetForRenderer = useMemo(() => {
     if (!previewData || previewData.length === 0) return null;
     const metricFormats = chartYAxes.map((key) =>
@@ -2600,13 +2681,28 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       title: formName?.trim() || "Vista previa",
       config: previewChartConfig ?? undefined,
       rows:
-        formChartType === "kpi"
+        formChartType === "kpi" && !previewShowsAttributeDimension
           ? [{ value: previewKpiValue ?? 0 }]
           : (widgetRows as Record<string, unknown>[]),
       aggregationConfig: {
         chartType: formChartType,
         chartXAxis,
         chartYAxes,
+        metrics: effectiveFormMetrics.map((m, i) => ({
+          field: m.field,
+          func: m.func,
+          alias: aggregationResultColumnKey(m, i),
+          ...(m.displayRole ? { displayRole: m.displayRole } : {}),
+        })),
+        enabled: true,
+        ...(previewShowsAttributeDimension
+          ? {
+              resultDisplayMode: analysisResultDisplayMode,
+              resultAttributeDimension: analysisAttributeDimension.trim() || undefined,
+              resultAttributePick: analysisAttributePick,
+              dimensions: [analysisAttributeDimension.trim(), ...formDimensions.filter((d) => d && d !== analysisAttributeDimension.trim())].filter(Boolean),
+            }
+          : {}),
         tableRowFields: tableRowFields.length > 0 ? tableRowFields : undefined,
         tableColumnFields: tableColumnFields.length > 0 ? tableColumnFields : undefined,
         geoHints,
@@ -2637,6 +2733,14 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         showDataLabels,
         labelVisibilityMode,
         chartComboSyncAxes,
+        chartDualAxis:
+          chartDualAxis && formChartType !== "combo" && chartYAxes.length >= 2 ? true : undefined,
+        chartMetricAxis:
+          (formChartType === "combo" || chartDualAxis) &&
+          chartYAxes.length >= 2 &&
+          Object.keys(chartMetricAxis).length > 0
+            ? chartMetricAxis
+            : undefined,
         chartQuickCalc: chartQuickCalc !== "none" ? chartQuickCalc : undefined,
         chartPercentGroupField: chartPercentGroupField.trim() || undefined,
         ...(formChartType === "map" && mapDefaultCountry.trim() ? { mapDefaultCountry: mapDefaultCountry.trim() } : {}),
@@ -2666,6 +2770,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     previewProcessedRows,
     previewChartConfig,
     previewKpiValue,
+    previewShowsAttributeDimension,
+    analysisResultDisplayMode,
+    analysisAttributeDimension,
+    analysisAttributePick,
+    effectiveFormMetrics,
+    formDimensions,
     chartYAxes,
     chartMetricFormats,
     chartValueType,
@@ -2705,6 +2815,8 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     showDataLabels,
     labelVisibilityMode,
     chartComboSyncAxes,
+    chartDualAxis,
+    chartMetricAxis,
     mapDefaultCountry,
     mapVisualFields,
     geoComponentOverrides,
@@ -3116,6 +3228,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         chartDatasetLabelOverrides?: Record<string, string>;
         chartCategoryColorMode?: "varied" | "uniform";
         chartPrimaryColor?: string;
+        analysisResultDisplayMode?: "number" | "dimension";
+        analysisAttributeDimension?: string;
+        analysisAttributePick?: "max" | "min";
       };
       if (Array.isArray(parsed.analysisSelectedMetricIds)) setAnalysisSelectedMetricIds(parsed.analysisSelectedMetricIds);
       if (Array.isArray(parsed.formDimensions)) setFormDimensions(parsed.formDimensions);
@@ -3142,6 +3257,15 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       if (typeof parsed.chartPrimaryColor === "string" && parsed.chartPrimaryColor.trim() !== "") {
         const p = parsed.chartPrimaryColor.trim();
         setChartPrimaryColor(p.startsWith("#") ? p : `#${p}`);
+      }
+      if (parsed.analysisResultDisplayMode === "number" || parsed.analysisResultDisplayMode === "dimension") {
+        setAnalysisResultDisplayMode(parsed.analysisResultDisplayMode);
+      }
+      if (typeof parsed.analysisAttributeDimension === "string") {
+        setAnalysisAttributeDimension(parsed.analysisAttributeDimension);
+      }
+      if (parsed.analysisAttributePick === "max" || parsed.analysisAttributePick === "min") {
+        setAnalysisAttributePick(parsed.analysisAttributePick);
       }
     } catch {
       // ignore invalid draft
@@ -3174,6 +3298,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartDatasetLabelOverrides,
       chartCategoryColorMode,
       chartPrimaryColor,
+      analysisResultDisplayMode,
+      analysisAttributeDimension,
+      analysisAttributePick,
     };
     window.localStorage.setItem(analysisDraftStorageKey, JSON.stringify(draft));
   }, [
@@ -3201,6 +3328,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartDatasetLabelOverrides,
     chartCategoryColorMode,
     chartPrimaryColor,
+    analysisResultDisplayMode,
+    analysisAttributeDimension,
+    analysisAttributePick,
   ]);
 
   const saveDashboardFiltersOnly = useCallback(async () => {
@@ -3505,6 +3635,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       toast.error("Nombre requerido");
       return;
     }
+    const duplicate = findDuplicateSavedMetricName(savedMetrics, name, editingId);
+    if (duplicate) {
+      toast.error(`Ya existe una métrica con el nombre «${duplicate.name ?? name}». Elegí otro nombre.`);
+      return;
+    }
     const firstMetric = effectiveFormMetrics[0];
     if (!firstMetric) {
       toast.error("Agregá al menos una métrica (seleccioná en Análisis o creá en Métrica)");
@@ -3609,7 +3744,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           : Object.keys(chartMetricFormats).length > 0
             ? chartMetricFormats
             : undefined,
-      chartComboSyncAxes: formChartType === "combo" && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
+      chartComboSyncAxes:
+        (formChartType === "combo" || chartDualAxis) && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
+      chartDualAxis: chartDualAxis && formChartType !== "combo" && chartYAxes.length >= 2 ? true : undefined,
+      chartMetricAxis:
+        (formChartType === "combo" || chartDualAxis) && chartYAxes.length >= 2 && Object.keys(chartMetricAxis).length > 0
+          ? chartMetricAxis
+          : undefined,
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
       chartGridColor: chartGridColor.trim() || undefined,
@@ -3677,7 +3818,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         aggregationConfig,
       };
       if (editingId) {
-        next = savedMetrics.map((s) => (s.id === editingId ? item : s));
+        next = savedMetrics.map((s) => (String(s.id) === String(editingId) ? item : s));
       } else {
         next = [...savedMetrics, item];
       }
@@ -3791,6 +3932,11 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     const name = (metricNameToSave || formName).trim();
     if (!name) {
       toast.error("Escribí un nombre para la métrica (campo «Nombre de la métrica»).");
+      return;
+    }
+    const duplicate = findDuplicateSavedMetricName(savedMetrics, name, editingId);
+    if (duplicate) {
+      toast.error(`Ya existe una métrica con el nombre «${duplicate.name ?? name}». Elegí otro nombre.`);
       return;
     }
     const useReuseFlow = formulaFromSavedMetricIds.length >= 2 && formulaFromReuseExpr.trim();
@@ -3932,7 +4078,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
           : Object.keys(chartMetricFormats).length > 0
             ? chartMetricFormats
             : undefined,
-      chartComboSyncAxes: formChartType === "combo" && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
+      chartComboSyncAxes:
+        (formChartType === "combo" || chartDualAxis) && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
+      chartDualAxis: chartDualAxis && formChartType !== "combo" && chartYAxes.length >= 2 ? true : undefined,
+      chartMetricAxis:
+        (formChartType === "combo" || chartDualAxis) && chartYAxes.length >= 2 && Object.keys(chartMetricAxis).length > 0
+          ? chartMetricAxis
+          : undefined,
       chartGridXDisplay: chartGridXDisplay === false ? false : undefined,
       chartGridYDisplay: chartGridYDisplay === false ? false : undefined,
       chartGridColor: chartGridColor.trim() || undefined,
@@ -3970,18 +4122,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       ),
     };
     const item: SavedMetricForm = {
-      id: `sm-${Date.now()}`,
+      id: editingId ?? `sm-${Date.now()}`,
       name,
       metric: metricToSave,
       aggregationConfig,
     };
     setSaving(true);
     try {
-      const next = [...savedMetrics, item];
+      const next = editingId
+        ? savedMetrics.map((s) => (String(s.id) === String(editingId) ? item : s))
+        : [...savedMetrics, item];
       const res = await fetch(`/api/etl/${etlId}/metrics`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ savedMetrics: next }),
+        body: JSON.stringify({
+          savedMetrics: next,
+          ...(activeDatasetIdForSave && { datasetId: activeDatasetIdForSave }),
+        }),
       });
       const json = await safeJsonResponse(res);
       if (!res.ok || !json.ok) {
@@ -3989,7 +4146,12 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
         return;
       }
       setData((prev) => (prev ? { ...prev, savedMetrics: next } : null));
-      toast.success(`Métrica «${name}» guardada en Calculadas (métricas).`);
+      if (editingId) {
+        toast.success(`Métrica «${name}» actualizada.`);
+        toast.success("También se actualizó en los dashboards que la utilizan.", { duration: 4000 });
+      } else {
+        toast.success(`Métrica «${name}» guardada en Calculadas (métricas).`);
+      }
       setAfterSaveInB("metric");
     } catch {
       toast.error("Error al guardar la métrica");
@@ -4023,12 +4185,23 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
   };
 
   const buildAnalysisPayload = useCallback((name: string, existingAnalysisId?: string | null) => {
-    const effectiveDims = resolveAnalysisDimensionsFromConfig({
+    const baseDims = resolveAnalysisDimensionsFromConfig({
       dimensions: formDimensions,
       dimension: formDimensions[0],
       dimension2: formDimensions[1],
       chartXAxis,
     });
+    const attrDim =
+      analysisResultDisplayMode === "dimension" && analysisAttributeDimension.trim()
+        ? analysisAttributeDimension.trim()
+        : "";
+    const dimsList = [...(baseDims.dimensions ?? [])].filter((d) => typeof d === "string" && d.trim() !== "");
+    if (attrDim && !dimsList.some((d) => d === attrDim)) dimsList.push(attrDim);
+    const effectiveDims = {
+      dimensions: dimsList,
+      dimension: dimsList[0] ?? baseDims.dimension,
+      dimension2: dimsList[1] ?? baseDims.dimension2,
+    };
     const chartMetricFormatsPayload =
       chartYAxes.length > 0
         ? Object.fromEntries(
@@ -4066,6 +4239,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartDatasetLabelOverrides:
         Object.keys(chartDatasetLabelOverrides).length > 0 ? chartDatasetLabelOverrides : undefined,
       labelVisibilityMode: labelVisibilityMode !== "auto" ? labelVisibilityMode : undefined,
+      resultDisplayMode: analysisResultDisplayMode !== "number" ? analysisResultDisplayMode : undefined,
+      resultAttributeDimension:
+        analysisResultDisplayMode === "dimension" && analysisAttributeDimension.trim()
+          ? analysisAttributeDimension.trim()
+          : undefined,
+      resultAttributePick:
+        analysisResultDisplayMode === "dimension" ? analysisAttributePick : undefined,
       chartValueType: chartValueType !== "number" ? chartValueType : undefined,
       chartValueScale: chartValueScale !== "none" ? chartValueScale : undefined,
       chartNumberFormat: chartValueScale !== "none" ? chartValueScale : chartValueType !== "number" ? chartValueType : undefined,
@@ -4073,6 +4253,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       chartThousandSep,
       chartDecimals,
       chartMetricFormats: chartMetricFormatsPayload,
+      chartComboSyncAxes:
+        (formChartType === "combo" || chartDualAxis) && chartYAxes.length >= 2 ? chartComboSyncAxes : undefined,
+      chartDualAxis: chartDualAxis && formChartType !== "combo" && chartYAxes.length >= 2 ? true : undefined,
+      chartMetricAxis:
+        (formChartType === "combo" || chartDualAxis) && chartYAxes.length >= 2 && Object.keys(chartMetricAxis).length > 0
+          ? chartMetricAxis
+          : undefined,
       chartSortDirection: chartSortDirection !== "none" ? chartSortDirection : undefined,
       chartSortBy: chartSortBy !== "series" ? chartSortBy : undefined,
       chartSortByMetric: chartSortByMetric || undefined,
@@ -4164,6 +4351,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     geoComponentOverrides,
     geoOverridesByXLabel,
     analysisSelectedMetricIds,
+    analysisResultDisplayMode,
+    analysisAttributeDimension,
+    analysisAttributePick,
     formDimensions,
     formChartType,
     chartXAxis,
@@ -4197,6 +4387,9 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     chartPinnedDimensions,
     chartColorScheme,
     chartMetricFormats,
+    chartComboSyncAxes,
+    chartDualAxis,
+    chartMetricAxis,
     chartRankingEnabled,
     chartRankingTop,
     chartRankingMetric,
@@ -4212,6 +4405,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
     analysisTimeRange,
     analysisDateFrom,
     analysisDateTo,
+    activeDatasetIdForSave,
   ]);
 
   const saveAnalysisToEtl = async () => {
@@ -4320,6 +4514,10 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setEditingSavedAnalysisId(String(a.id ?? ""));
       setAnalysisNameToSave(String(a.name ?? ""));
       setAnalysisSelectedMetricIds(Array.isArray(a.metricIds) ? (a.metricIds as string[]) : []);
+      const rdm = a.resultDisplayMode;
+      setAnalysisResultDisplayMode(rdm === "dimension" || rdm === "attribute" ? "dimension" : "number");
+      setAnalysisAttributeDimension(typeof a.resultAttributeDimension === "string" ? a.resultAttributeDimension : "");
+      setAnalysisAttributePick(a.resultAttributePick === "min" ? "min" : "max");
       const dims =
         Array.isArray(a.dimensions) && (a.dimensions as unknown[]).length > 0
           ? (a.dimensions as string[])
@@ -4372,6 +4570,13 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
       setChartGridColor(typeof a.chartGridColor === "string" ? a.chartGridColor : "");
       setChartAxisXVisible(a.chartAxisXVisible !== false);
       setChartAxisYVisible(a.chartAxisYVisible !== false);
+      setChartComboSyncAxes(!!a.chartComboSyncAxes);
+      setChartDualAxis(!!a.chartDualAxis);
+      setChartMetricAxis(
+        a.chartMetricAxis && typeof a.chartMetricAxis === "object"
+          ? (a.chartMetricAxis as Record<string, "left" | "right">)
+          : {}
+      );
       setChartSortDirection(
         a.chartSortDirection === "asc" || a.chartSortDirection === "desc" || a.chartSortDirection === "none"
           ? (a.chartSortDirection as "none" | "asc" | "desc")
@@ -5404,59 +5609,17 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                 </section>
               )}
 
-              {/* Wizard B0: Cálculo (unificado: tipo + simple / conteo / ratio / fórmula personalizada) */}
+              {/* Wizard B0: Cálculo (fórmula / agregación). La visualización «métrica como atributo» se configura en Análisis → Preview. */}
               {wizard === "B" && wizardStep === 0 && (
                 <section className="rounded-xl border p-6 space-y-4" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg-elevated)" }}>
                   <h3 className="text-base font-semibold mb-2" style={{ color: "var(--platform-fg)" }}>Cálculo de la métrica</h3>
-                  <p className="text-sm mb-4" style={{ color: "var(--platform-fg-muted)" }}>
-                    Elegí si querés una <strong>medida</strong> (agregado numérico) o un <strong>atributo</strong> (valor de dimensión para mostrar en gráficos/tablas en lugar de un conteo).
-                  </p>
-
-                  <div className="flex flex-wrap gap-2 mb-4">
-                    {[
-                      { value: "measure" as const, label: "Medida (número)" },
-                      { value: "attribute" as const, label: "Atributo (dimensión)" },
-                    ].map((opt) => (
-                      <button
-                        key={opt.value}
-                        type="button"
-                        onClick={() => {
-                          setMetricKind(opt.value);
-                          if (opt.value === "attribute") {
-                            setFormMetrics((prev) => {
-                              const current = prev[0] ?? { id: `m-${Date.now()}`, field: "", func: "ATTRIBUTE", alias: "" };
-                              return [{
-                                ...current,
-                                func: "ATTRIBUTE",
-                                displayRole: "attribute",
-                                expression: undefined,
-                              }];
-                            });
-                          } else {
-                            setFormMetrics((prev) => {
-                              const current = prev[0] ?? { id: `m-${Date.now()}`, field: "", func: "SUM", alias: "" };
-                              return [{ ...current, func: "SUM", displayRole: undefined }];
-                            });
-                          }
-                        }}
-                        className="px-3 py-2 rounded-xl text-sm border transition-colors"
-                        style={{
-                          borderColor: metricKind === opt.value ? "var(--platform-accent)" : "var(--platform-border)",
-                          background: metricKind === opt.value ? "var(--platform-accent-dim)" : "var(--platform-surface)",
-                          color: "var(--platform-fg)",
-                        }}
-                      >
-                        {opt.label}
-                      </button>
-                    ))}
-                  </div>
 
                   {metricKind === "attribute" ? (
                     <div className="rounded-lg border p-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}>
-                      <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Campo atributo</Label>
                       <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-                        Se mostrará el valor de esta dimensión/campo en tablas, KPI y etiquetas de gráficos (en lugar de un número agregado como conteo o suma).
+                        Métrica atributo (legado). Para mostrar el nombre de una dimensión asociada al resultado (ej. medio con mayor reach), configurá «Mostrar dimensión asociada» en el preview del Análisis.
                       </p>
+                      <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Campo atributo</Label>
                       <select
                         value={formMetrics[0]?.field ?? ""}
                         onChange={(e) => {
@@ -5729,7 +5892,7 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                               <Input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder="Ej. Ventas totales, Cantidad vendida" className="h-9 text-sm rounded-lg w-full max-w-[220px] !bg-[var(--platform-bg)]" style={{ borderColor: "var(--platform-border)", color: "var(--platform-fg)" }} />
                               <Button type="button" className="rounded-xl h-9" style={{ background: "var(--platform-accent)", color: "var(--platform-bg)" }} onClick={saveMetricFromCalculationStep} disabled={saving || !formName.trim() || (!(formulaFromSavedMetricIds.length >= 2 && formulaFromReuseExpr.trim()) && (!exprValue.trim() || !!formulaSyntaxError))}>
                                 {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                                {saving ? " Guardando…" : " Guardar como métrica"}
+                                {saving ? " Guardando…" : editingId ? " Actualizar métrica" : " Guardar como métrica"}
                               </Button>
                             </div>
                           </div>
@@ -6720,6 +6883,73 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                     {timeColumn && analysisGranularity ? ` Agrupando por ${analysisGranularity === "month" ? "mes" : analysisGranularity === "week" ? "semana" : analysisGranularity === "day" ? "día" : analysisGranularity === "quarter" ? "trimestre" : analysisGranularity === "semester" ? "semestre" : "año"} (${getSampleDisplayLabel(timeColumn)}).` : ""}
                     {analysisTimeRange === "custom" && analysisDateFrom && analysisDateTo ? ` Rango: ${analysisDateFrom} a ${analysisDateTo}.` : analysisTimeRange && analysisTimeRange !== "0" && Number(analysisTimeRange) > 0 ? ` Últimos ${analysisTimeRange} ${analysisTimeRange === "7" || analysisTimeRange === "30" ? "días" : "meses"} (respecto a los datos).` : timeColumn ? " Sin filtro de fecha: se muestran todos los datos." : ""}
                   </p>
+                  <div className="rounded-lg border p-4 mb-4 space-y-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                    <Label className="text-sm font-medium block" style={{ color: "var(--platform-fg)" }}>Mostrar resultado como</Label>
+                    <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                      Podés mostrar el número de la métrica o la dimensión asociada al extremo (ej. el medio con mayor reach).
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {[
+                        { value: "number" as const, label: "Mostrar métrica como número" },
+                        { value: "dimension" as const, label: "Mostrar la dimensión asociada" },
+                      ].map((opt) => (
+                        <button
+                          key={opt.value}
+                          type="button"
+                          onClick={() => setAnalysisResultDisplayMode(opt.value)}
+                          className="px-3 py-2 rounded-xl text-sm border transition-colors"
+                          style={{
+                            borderColor: analysisResultDisplayMode === opt.value ? "var(--platform-accent)" : "var(--platform-border)",
+                            background: analysisResultDisplayMode === opt.value ? "var(--platform-accent-dim)" : "var(--platform-bg)",
+                            color: "var(--platform-fg)",
+                          }}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    {analysisResultDisplayMode === "dimension" && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div className="space-y-1">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Dimensión a mostrar</Label>
+                          <select
+                            value={analysisAttributeDimension}
+                            onChange={(e) => setAnalysisAttributeDimension(e.target.value)}
+                            className="w-full h-9 rounded-lg border px-3 text-sm"
+                            style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          >
+                            <option value="">— Elegir dimensión —</option>
+                            {fields
+                              .filter((c) => {
+                                const role = columnRoles[c]?.role ?? "dimension";
+                                return role === "dimension" || role === "key" || role === "time" || role === "geo";
+                              })
+                              .map((c) => (
+                                <option key={c} value={c}>{getSampleDisplayLabel(c)}</option>
+                              ))}
+                          </select>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Elegir por</Label>
+                          <select
+                            value={analysisAttributePick}
+                            onChange={(e) => setAnalysisAttributePick(e.target.value === "min" ? "min" : "max")}
+                            className="w-full h-9 rounded-lg border px-3 text-sm"
+                            style={{ borderColor: "var(--platform-border)", backgroundColor: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                          >
+                            <option value="max">Mayor valor de la métrica</option>
+                            <option value="min">Menor valor de la métrica</option>
+                          </select>
+                        </div>
+                        {previewShowsAttributeDimension && previewData && previewData.length > 0 && (
+                          <div className="sm:col-span-2 rounded-lg border px-3 py-2" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
+                            <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Resultado destacado: </span>
+                            <span className="text-sm font-semibold" style={{ color: "var(--platform-fg)" }}>{previewKpiDisplayText}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                   {transformLabel && (
                     <div className="rounded-lg border p-3 mb-4 flex items-center gap-2" style={{ borderColor: "var(--platform-accent-dim)", background: "var(--platform-accent-dim)" }}>
                       <span className="text-xs font-medium" style={{ color: "var(--platform-accent)" }}>Transformación activa:</span>
@@ -7517,11 +7747,68 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                           </div>
                         </div>
                       )}
-                      {formChartType === "combo" && chartYAxes.length >= 2 && (
-                        <div className="flex items-center gap-3 mt-3">
-                          <input type="checkbox" id="chartComboSyncAxes" checked={chartComboSyncAxes} onChange={(e) => setChartComboSyncAxes(e.target.checked)} className="rounded" />
-                          <Label htmlFor="chartComboSyncAxes" className="text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>Sincronizar ejes</Label>
-                          <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Alinear el eje derecho con el izquierdo para comparar visualmente dos métricas con escalas distintas.</p>
+                      {chartYAxes.length >= 2 &&
+                        (formChartType === "combo" ||
+                          formChartType === "line" ||
+                          formChartType === "area" ||
+                          formChartType === "bar" ||
+                          formChartType === "horizontalBar" ||
+                          formChartType === "stackedColumn") && (
+                        <div className="mt-3 space-y-3 rounded-lg border p-3" style={{ borderColor: "var(--platform-border)", background: "var(--platform-surface)" }}>
+                          {formChartType !== "combo" && (
+                            <div className="flex items-center gap-3">
+                              <input
+                                type="checkbox"
+                                id="chartDualAxis"
+                                checked={chartDualAxis}
+                                onChange={(e) => {
+                                  setChartDualAxis(e.target.checked);
+                                  if (!e.target.checked) setChartComboSyncAxes(false);
+                                }}
+                                className="rounded"
+                              />
+                              <Label htmlFor="chartDualAxis" className="text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>
+                                Doble eje
+                              </Label>
+                              <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                                Habilitá eje izquierdo y derecho cuando hay dos o más métricas.
+                              </p>
+                            </div>
+                          )}
+                          {(formChartType === "combo" || chartDualAxis) && (
+                            <>
+                              <div className="flex items-center gap-3">
+                                <input type="checkbox" id="chartComboSyncAxes" checked={chartComboSyncAxes} onChange={(e) => setChartComboSyncAxes(e.target.checked)} className="rounded" />
+                                <Label htmlFor="chartComboSyncAxes" className="text-sm cursor-pointer" style={{ color: "var(--platform-fg)" }}>Sincronizar ejes</Label>
+                                <p className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>Alinear el eje derecho con el izquierdo para comparar métricas con escalas distintas.</p>
+                              </div>
+                              <div className="space-y-2">
+                                <Label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>Asignación de eje por métrica</Label>
+                                {chartYAxes.map((key, idx) => {
+                                  const label = chartAvailableColumns.find((c) => c.key === key)?.label ?? key;
+                                  const side = chartMetricAxis[key] ?? (idx === 0 ? "left" : "right");
+                                  return (
+                                    <div key={key} className="flex flex-wrap items-center gap-2">
+                                      <span className="text-xs flex-1 min-w-[100px]" style={{ color: "var(--platform-fg)" }}>{label}</span>
+                                      <select
+                                        value={side}
+                                        onChange={(e) => {
+                                          const v = e.target.value === "right" ? "right" : "left";
+                                          setChartDualAxis(true);
+                                          setChartMetricAxis((prev) => ({ ...prev, [key]: v }));
+                                        }}
+                                        className="h-8 rounded-lg border px-2 text-xs"
+                                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)", color: "var(--platform-fg)" }}
+                                      >
+                                        <option value="left">Eje izquierdo</option>
+                                        <option value="right">Eje derecho</option>
+                                      </select>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </>
+                          )}
                         </div>
                       )}
                       <Label className="text-sm font-medium mb-2 block mt-3" style={{ color: "var(--platform-fg)" }}>Graduación (paso del eje)</Label>
@@ -7899,10 +8186,16 @@ export default function EtlMetricsClient({ etlId, etlTitle, etlClientId = null, 
                       </div>
                     ) : (
                       <>
-                        {formChartType === "kpi" && previewKpiValue != null && (
+                        {formChartType === "kpi" && (
                           <div className="flex flex-col items-center justify-center min-h-[260px] gap-1">
-                            <span className="text-4xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{formatNumber(previewKpiValue)}</span>
-                            <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>{chartYAxes[0] ? (chartAvailableColumns.find((c) => c.key === chartYAxes[0])?.label ?? chartYAxes[0]) : effectiveFormMetrics[0]?.alias || effectiveFormMetrics[0]?.field || ""}</span>
+                            <span className="text-4xl font-bold tabular-nums" style={{ color: "var(--platform-fg)" }}>{previewKpiDisplayText}</span>
+                            <span className="text-sm" style={{ color: "var(--platform-fg-muted)" }}>
+                              {previewShowsAttributeDimension
+                                ? getSampleDisplayLabel(analysisAttributeDimension) || analysisAttributeDimension
+                                : chartYAxes[0]
+                                  ? (chartAvailableColumns.find((c) => c.key === chartYAxes[0])?.label ?? chartYAxes[0])
+                                  : effectiveFormMetrics[0]?.alias || effectiveFormMetrics[0]?.field || ""}
+                            </span>
                           </div>
                         )}
                         {previewWidgetForRenderer && formChartType !== "kpi" && (

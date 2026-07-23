@@ -23,11 +23,13 @@ describe("getCompareColumnKeys", () => {
     expect(keys.tableExtraKeys).toContain("ventas_delta_pct");
   });
 
-  it("fixed: vs_fijo / var_pct_fijo", () => {
-    const r = { m: 50, m_vs_fijo: 10, m_var_pct_fijo: 25 };
+  it("fixed: vs_fijo / var_pct_fijo / serie objetivo", () => {
+    const r = { m: 50, m_fijo: 40, m_vs_fijo: 10, m_var_pct_fijo: 25 };
     const keys = getCompareColumnKeys({ kind: "fixed", value: 40 }, "m", r);
     expect(keys.deltaKey).toBe("m_vs_fijo");
     expect(keys.deltaPctKey).toBe("m_var_pct_fijo");
+    expect(keys.referenceKey).toBe("m_fijo");
+    expect(keys.referenceSeriesKey).toBe("m_fijo");
   });
 
   it("readComparePresentation temporal", () => {

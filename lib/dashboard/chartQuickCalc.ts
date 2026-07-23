@@ -40,13 +40,15 @@ function transformPoint(
     case "percent_dimension": {
       const denom = resolveDenom(di, dsi);
       if (denom == null || denom === 0) return 0;
-      return (value / denom) * 100;
+      // Ratio 0–1; formatValue(percent) multiplica ×100 al mostrar.
+      return value / denom;
     }
     case "vs_average": {
       const vals = allChartValues(config);
       if (vals.length === 0) return 0;
       const avg = sumFiniteNumbers(vals) / vals.length;
       if (avg === 0) return 0;
+      // Índice: 100 = promedio (alineado al hint de la UI).
       return (value / avg) * 100;
     }
     case "vs_max": {
@@ -152,12 +154,12 @@ export function applyTableQuickCalc(
       let next = v;
       switch (mode) {
         case "percent_total":
-          next = total !== 0 ? (v / total) * 100 : 0;
+          next = total !== 0 ? v / total : 0;
           break;
         case "percent_category":
         case "percent_series":
         case "percent_dimension":
-          next = rowTotal !== 0 ? (v / rowTotal) * 100 : 0;
+          next = rowTotal !== 0 ? v / rowTotal : 0;
           break;
         case "vs_average":
           next = avg !== 0 ? (v / avg) * 100 : 0;
@@ -181,10 +183,10 @@ export function applyTableQuickCalc(
 export function applyScalarQuickCalc(value: number, mode: ChartQuickCalc): number {
   if (mode === "none") return value;
   if (mode === "percent_total" || mode === "percent_category" || mode === "percent_series" || mode === "percent_dimension") {
-    return 100;
+    return 1;
   }
   if (mode === "vs_average" || mode === "vs_max" || mode === "vs_min") {
-    return 100;
+    return 1;
   }
   return value;
 }

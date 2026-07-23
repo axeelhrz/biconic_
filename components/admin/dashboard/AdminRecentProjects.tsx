@@ -6,6 +6,7 @@ import AdminDashboardProjectCard, {
 } from "./AdminDashboardProjectCard";
 import { createClient } from "@/lib/supabase/client";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
+import { resolveDashboardCoverImageUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 export default function AdminRecentProjects() {
   const [items, setItems] = useState<Dashboard[]>([]);
@@ -58,7 +59,10 @@ export default function AdminRecentProjects() {
           return {
             id: String(row.id),
             title: row.title ?? "Sin título",
-            imageUrl: row.image_url ?? "/Image.svg",
+            imageUrl: resolveDashboardCoverImageUrl({
+              layout: row.layout,
+              image_url: row.image_url,
+            }),
             status: dashboardPublishedStatusFromRow(row),
             description: row.description ?? "",
 

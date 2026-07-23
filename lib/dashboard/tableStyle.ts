@@ -6,8 +6,17 @@ export type TableStyleConfig = {
   rowHeight?: number;
   /** Alto del encabezado (px). */
   headerHeight?: number;
-  /** Tamaño de fuente (px). */
+  /**
+   * Tamaño de fuente base (px). Si no hay overrides por parte,
+   * aplica a encabezados, celdas y título.
+   */
   fontSize?: number;
+  /** Tamaño de fuente de encabezados de columna (px). */
+  headerFontSize?: number;
+  /** Tamaño de fuente de celdas (medidas y dimensiones) (px). */
+  bodyFontSize?: number;
+  /** Tamaño de fuente del título de la tarjeta (px). */
+  titleFontSize?: number;
   /** Padding horizontal de celdas (px). */
   cellPaddingX?: number;
   /** Padding vertical de celdas (px). */
@@ -37,6 +46,9 @@ export type ResolvedTableStyle = {
   rowHeight: number;
   headerHeight: number;
   fontSize: number;
+  headerFontSize: number;
+  bodyFontSize: number;
+  titleFontSize: number;
   cellPaddingX: number;
   cellPaddingY: number;
   defaultColumnWidth: number;
@@ -74,6 +86,15 @@ export function normalizeTableStyleConfig(raw: unknown): TableStyleConfig | unde
       ? { headerHeight: clampInt(o.headerHeight, 24, 120, DEFAULT_TABLE_STYLE.headerHeight) }
       : {}),
     ...(o.fontSize != null ? { fontSize: clampInt(o.fontSize, 9, 24, DEFAULT_TABLE_STYLE.fontSize) } : {}),
+    ...(o.headerFontSize != null
+      ? { headerFontSize: clampInt(o.headerFontSize, 9, 28, DEFAULT_TABLE_STYLE.fontSize) }
+      : {}),
+    ...(o.bodyFontSize != null
+      ? { bodyFontSize: clampInt(o.bodyFontSize, 9, 28, DEFAULT_TABLE_STYLE.fontSize) }
+      : {}),
+    ...(o.titleFontSize != null
+      ? { titleFontSize: clampInt(o.titleFontSize, 9, 32, DEFAULT_TABLE_STYLE.fontSize) }
+      : {}),
     ...(o.cellPaddingX != null
       ? { cellPaddingX: clampInt(o.cellPaddingX, 0, 32, DEFAULT_TABLE_STYLE.cellPaddingX) }
       : {}),
@@ -95,10 +116,14 @@ export function normalizeTableStyleConfig(raw: unknown): TableStyleConfig | unde
 export function resolveTableStyle(partial?: TableStyleConfig | null): ResolvedTableStyle {
   const p = partial ?? {};
   const columnWidths = normalizeColumnWidths(p.columnWidths);
+  const baseFont = clampInt(p.fontSize, 9, 24, DEFAULT_TABLE_STYLE.fontSize);
   return {
     rowHeight: clampInt(p.rowHeight, 20, 120, DEFAULT_TABLE_STYLE.rowHeight),
     headerHeight: clampInt(p.headerHeight, 24, 120, DEFAULT_TABLE_STYLE.headerHeight),
-    fontSize: clampInt(p.fontSize, 9, 24, DEFAULT_TABLE_STYLE.fontSize),
+    fontSize: baseFont,
+    headerFontSize: clampInt(p.headerFontSize, 9, 28, baseFont),
+    bodyFontSize: clampInt(p.bodyFontSize, 9, 28, baseFont),
+    titleFontSize: clampInt(p.titleFontSize, 9, 32, baseFont),
     cellPaddingX: clampInt(p.cellPaddingX, 0, 32, DEFAULT_TABLE_STYLE.cellPaddingX),
     cellPaddingY: clampInt(p.cellPaddingY, 0, 32, DEFAULT_TABLE_STYLE.cellPaddingY),
     defaultColumnWidth: clampInt(p.defaultColumnWidth, 48, 600, DEFAULT_TABLE_STYLE.defaultColumnWidth),
@@ -126,7 +151,7 @@ export function tableHeaderCellStyle(style: ResolvedTableStyle, columnKey: strin
     height: style.headerHeight,
     padding: `${style.cellPaddingY}px ${style.cellPaddingX}px`,
     textAlign: style.textAlign,
-    fontSize: style.fontSize,
+    fontSize: style.headerFontSize,
     lineHeight: 1.25,
     verticalAlign: "middle",
     whiteSpace: "nowrap",
@@ -144,7 +169,7 @@ export function tableBodyCellStyle(style: ResolvedTableStyle, columnKey: string)
     height: style.rowHeight,
     padding: `${style.cellPaddingY}px ${style.cellPaddingX}px`,
     textAlign: style.textAlign,
-    fontSize: style.fontSize,
+    fontSize: style.bodyFontSize,
     lineHeight: 1.25,
     verticalAlign: "middle",
     overflow: "hidden",

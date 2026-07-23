@@ -12,6 +12,7 @@ import {
   isArgentinaDefaultCountry,
   isPointInArgentinaBBox,
   resolveArProvinceGadmId,
+  rowsSuggestArgentinaProvinces,
   type ArProvinceGadmId,
 } from "@/lib/geo/argentinaProvinces";
 import { findArProvinceGadmIdForLatLon } from "@/lib/geo/pointInProvinceGeoJson";
@@ -31,7 +32,10 @@ import {
   buildMapDetailPopupHtml,
   isChartDetailCardActive,
 } from "@/lib/dashboard/chartDetailCard";
-import type { BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
+import {
+  resolveChartYAxisEntryToResultKey,
+  type BuildChartConfigWidget,
+} from "@/lib/dashboard/buildChartConfig";
 
 export type MapAggregationConfig = MapVisualConfigInput & {
   chartXAxis?: string;
@@ -230,6 +234,31 @@ function escapeHtml(s: string): string {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+}
+
+/** Alinea chartXAxis / dimensión con la clave real en las filas. */
+function matchRowKey(candidate: string | undefined, resultKeys: string[]): string | null {
+  const t = String(candidate ?? "").trim();
+  if (!t) return null;
+  if (resultKeys.includes(t)) return t;
+  const tl = t.toLowerCase();
+  for (const k of resultKeys) {
+    if (k.toLowerCase() === tl) return k;
+  }
+  const loose = (s: string) => s.toLowerCase().replace(/[\s-]+/g, "_").replace(/_+/g, "_");
+  const nt = loose(t);
+  for (const k of resultKeys) {
+    if (loose(k) === nt) return k;
+  }
+  return null;
+}
+
+function provinceSumsStyleKey(sums: Map<ArProvinceGadmId, number>): string {
+  if (sums.size === 0) return "empty";
+  return [...sums.entries()]
+    .map(([id, v]) => `${id}:${Number.isFinite(v) ? v.toFixed(4) : "na"}`)
+    .sort()
+    .join("|");
 }
 
 function formatChoroplethLegendValue(
@@ -483,7 +512,30 @@ export function DashboardMapWidget({
   height = 280,
 }: DashboardMapWidgetProps) {
   const mapDefaultCountry = mapDefaultCountryProp ?? aggregationConfig?.mapDefaultCountry;
-  const argentinaMode = isArgentinaDefaultCountry(mapDefaultCountry);
+  const configuredArgentina = isArgentinaDefaultCountry(mapDefaultCountry);
+
+  const dimensionLabelsPreview = useMemo(() => {
+    const capped = Array.isArray(rows) ? rows.slice(0, 48) : [];
+    if (capped.length === 0) return [] as unknown[];
+    const first = capped[0] as Record<string, unknown>;
+    const keys = Object.keys(first);
+    const xAxis =
+      aggregationConfig?.chartXAxis ?? aggregationConfig?.dimension ?? aggregationConfig?.dimensions?.[0];
+    const labelKey =
+      keys.find((k) => /^__geo_label$/i.test(k)) ??
+      matchRowKey(typeof xAxis === "string" ? xAxis : undefined, keys) ??
+      keys.find((k) => typeof first[k] === "string" && !/^__geo_/i.test(k)) ??
+      "";
+    if (!labelKey) return [] as unknown[];
+    return capped.map((row) => (row as Record<string, unknown>)[labelKey]);
+  }, [rows, aggregationConfig]);
+
+  const inferredArgentina = useMemo(
+    () => !configuredArgentina && rowsSuggestArgentinaProvinces(dimensionLabelsPreview),
+    [configuredArgentina, dimensionLabelsPreview]
+  );
+
+  const argentinaMode = configuredArgentina || inferredArgentina;
 
   const [arGeo, setArGeo] = useState<ArFeatureCollection | null>(null);
   const [arGeoError, setArGeoError] = useState(false);
@@ -548,21 +600,31 @@ export function DashboardMapWidget({
       }
     }
 
-    const xAxis = aggregationConfig?.chartXAxis ?? aggregationConfig?.dimension ?? aggregationConfig?.dimensions?.[0];
+    const xAxisRaw =
+      aggregationConfig?.chartXAxis ?? aggregationConfig?.dimension ?? aggregationConfig?.dimensions?.[0];
+    const xAxisKey = matchRowKey(typeof xAxisRaw === "string" ? xAxisRaw : undefined, keys);
     const yAxes = aggregationConfig?.chartYAxes;
+    const metrics = aggregationConfig?.metrics;
     const labelKeyRes =
-      geoLabelKey ?? (xAxis && keys.includes(xAxis) ? xAxis : (keys.find((k) => typeof first[k] === "string") ?? ""));
-    const valueKeyRes =
-      Array.isArray(yAxes) && yAxes[0] && keys.includes(yAxes[0])
-        ? yAxes[0]
-        : (keys.find((k) => typeof first[k] === "number" && k !== latColRes && k !== lonColRes) ?? "");
+      geoLabelKey ?? xAxisKey ?? (keys.find((k) => typeof first[k] === "string" && !/^__geo_/i.test(k)) ?? "");
 
-    const valueKeysForAgg =
-      Array.isArray(yAxes) && yAxes.length > 0
-        ? yAxes.map(String).filter((k) => k && keys.includes(k))
-        : valueKeyRes
-          ? [valueKeyRes]
-          : [];
+    const resolvedYKeys: string[] = [];
+    if (Array.isArray(yAxes) && yAxes.length > 0) {
+      for (const rawY of yAxes) {
+        const hit = resolveChartYAxisEntryToResultKey(String(rawY ?? "").trim(), metrics, keys);
+        if (hit && !resolvedYKeys.includes(hit)) resolvedYKeys.push(hit);
+      }
+    }
+    const valueKeyRes =
+      resolvedYKeys[0] ??
+      (keys.find((k) => {
+        if (k === latColRes || k === lonColRes || /^__geo_/i.test(k)) return false;
+        const v = first[k];
+        return typeof v === "number" || (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v)));
+      }) ??
+        "");
+
+    const valueKeysForAgg = resolvedYKeys.length > 0 ? resolvedYKeys : valueKeyRes ? [valueKeyRes] : [];
 
     const provinceSumsRes = new Map<ArProvinceGadmId, number>();
     const provinceMetricBagsRes = new Map<ArProvinceGadmId, Record<string, number>>();
@@ -606,21 +668,17 @@ export function DashboardMapWidget({
       const fromDim = rawLabel != null ? String(rawLabel) : "";
       const fromGeo = r.__geo_label != null ? String(r.__geo_label) : "";
 
-      let pid: ArProvinceGadmId | null = null;
-      let attributed = false;
-      if (latColRes && lonColRes) {
+      // Preferir nombre de provincia (dimensión) sobre lat/lon: el geocode de ciudad
+      // no debe pisar un label provincial válido para la coropleta.
+      let pid: ArProvinceGadmId | null =
+        resolveArProvinceGadmId(fromDim) ?? resolveArProvinceGadmId(fromGeo);
+
+      if (!pid && latColRes && lonColRes) {
         const lat = Number(r[latColRes]);
         const lon = Number(r[lonColRes]);
         if (useProvincePolygons && Number.isFinite(lat) && Number.isFinite(lon) && isPointInArgentinaBBox(lat, lon)) {
-          const pidPt = findArProvinceGadmIdForLatLon(arGeo, lat, lon);
-          if (pidPt) {
-            pid = pidPt;
-            attributed = true;
-          }
+          pid = findArProvinceGadmIdForLatLon(arGeo, lat, lon);
         }
-      }
-      if (!attributed) {
-        pid = resolveArProvinceGadmId(fromDim) ?? resolveArProvinceGadmId(fromGeo);
       }
       if (!pid) continue;
       if (!rowHasMapMetric(r)) continue;
@@ -697,6 +755,7 @@ export function DashboardMapWidget({
     };
   }, [rows, aggregationConfig, arGeo, arGeoError, argentinaMode]);
 
+  const choroplethStyleKey = useMemo(() => provinceSumsStyleKey(provinceSums), [provinceSums]);
   const mapVisual = useMemo(() => resolveMapVisualStyle(aggregationConfig), [aggregationConfig]);
 
   const formatMetricValue = useMemo(() => {
@@ -896,6 +955,7 @@ export function DashboardMapWidget({
           ) : null}
           <FitArgentinaGeoJson data={arGeo} />
           <GeoJSON
+            key={`ar-choro-${choroplethStyleKey}`}
             data={arGeo as never}
             style={(feat) => styleFeature(feat as ArProvinceFeature)}
             onEachFeature={(feature, layer) => {

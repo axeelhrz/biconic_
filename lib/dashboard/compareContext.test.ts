@@ -106,7 +106,7 @@ describe("buildDashboardCompareContexts", () => {
       },
     });
     expect(ctx.comparable).toBe(false);
-    expect(ctx.unavailableReason).toBe("Sin período disponible");
+    expect(ctx.unavailableReason).toMatch(/año y mes|período/i);
   });
 
   it("FY parcial comparable con dual query", () => {

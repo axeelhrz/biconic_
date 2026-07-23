@@ -21,7 +21,7 @@ export type AggregationMetricEdit = {
   condition?: MetricConditionEdit;
   formula?: string;
   expression?: string;
-  /** measure = agregado numérico; attribute = valor de dimensión/campo textual. */
+  /** measure = agregado numérico; attribute = valor de dimensión/campo textual (legacy). */
   displayRole?: "measure" | "attribute";
 };
 
@@ -40,6 +40,15 @@ export type AggregationConfigEdit = {
   metrics: AggregationMetricEdit[];
   filters?: AggregationFilterEdit[];
   dimensionDefaultFilters?: DimensionDefaultFilterEdit[];
+  /**
+   * Análisis: mostrar el número de la métrica o la dimensión asociada al extremo
+   * (ej. nombre del medio con mayor reach).
+   */
+  resultDisplayMode?: "number" | "dimension";
+  /** Dimensión cuyo valor se muestra cuando resultDisplayMode === "dimension". */
+  resultAttributeDimension?: string;
+  /** Extremo de la métrica usado para elegir la dimensión (default max). */
+  resultAttributePick?: "max" | "min";
   orderBy?: { field: string; direction: "ASC" | "DESC" };
   limit?: number;
   cumulative?: "none" | "running_sum" | "ytd";
@@ -74,6 +83,11 @@ export type AggregationConfigEdit = {
   chartScaleMin?: string | number;
   chartScaleMax?: string | number;
   chartAxisStep?: string | number;
+  chartScalePerMetric?: Record<string, { min?: number; max?: number; step?: number }>;
+  chartAxisXReverse?: boolean;
+  chartAxisYReverse?: boolean;
+  chartBarBorderRadius?: number;
+  chartPointRadius?: number;
   chartRankingEnabled?: boolean;
   chartRankingTop?: number;
   chartRankingMetric?: string;
@@ -94,6 +108,10 @@ export type AggregationConfigEdit = {
     { valueType?: string; valueScale?: string; currencySymbol?: string; decimals?: number; thousandSep?: boolean }
   >;
   chartComboSyncAxes?: boolean;
+  /** Habilita eje Y derecho para gráficos con 2+ métricas (line/area/bar). Combo siempre usa doble eje. */
+  chartDualAxis?: boolean;
+  /** Asignación de cada métrica (clave chartYAxes) al eje izquierdo o derecho. */
+  chartMetricAxis?: Record<string, "left" | "right">;
   chartGridXDisplay?: boolean;
   chartGridYDisplay?: boolean;
   chartGridColor?: string;

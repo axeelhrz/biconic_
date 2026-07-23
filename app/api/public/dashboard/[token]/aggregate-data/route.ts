@@ -10,9 +10,12 @@ import {
   type GeoComponentOverrides,
   type GeoHints,
 } from "@/lib/geo/geo-enrichment";
-import { buildMonthFilterSqlClause } from "@/lib/dashboard/monthFilterSql";
 import { expandMonthValueWithYearFromFilters } from "@/lib/dashboard/expandMonthFilterWithYear";
-import { toSqlLiteral } from "@/lib/dashboard/toSqlLiteral";
+import {
+  buildAggregationFilterSqlClause,
+  normalizeAggregationFilterOperator,
+} from "@/lib/dashboard/buildAggregationFilterSql";
+import { safeNumericCast } from "@/lib/dashboard/coerceNumericSqlExpr";
 
 // --- Interfaces (Copied from internal route) ---
 interface Metric {
@@ -260,10 +263,17 @@ export async function POST(
       const whereClauses = validFilters
         .map((f: any) => {
           const safeField = f.field.replace(/"/g, '""');
-          const op = (f.operator || "=").toUpperCase().trim();
+          const op = normalizeAggregationFilterOperator(f.operator);
 
-          let fieldExpression;
-          if (op === "MONTH" || op === "DAY" || op === "YEAR" || op === "QUARTER" || op === "SEMESTER" || op === "YEAR_MONTH") {
+          let fieldExpression: string;
+          if (
+            op === "MONTH" ||
+            op === "DAY" ||
+            op === "YEAR" ||
+            op === "QUARTER" ||
+            op === "SEMESTER" ||
+            op === "YEAR_MONTH"
+          ) {
             fieldExpression = `(
               CASE
                 WHEN "${safeField}"::text ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$' THEN to_date("${safeField}"::text, '${dateSlashFmt}')
@@ -271,84 +281,20 @@ export async function POST(
                 ELSE "${safeField}"::date
               END
             )`;
+          } else if (f.cast === "numeric") {
+            fieldExpression = safeNumericCast(`"${safeField}"`);
           } else {
-            fieldExpression =
-              f.cast === "numeric"
-                ? `"${safeField}"::numeric`
-                : `"${safeField}"`;
+            fieldExpression = `"${safeField}"`;
           }
 
-          if (op === "MONTH") {
-            const monthVal = expandMonthValueWithYearFromFilters(f.field, f.value, validFilters);
-            return buildMonthFilterSqlClause(fieldExpression, monthVal);
-          }
-          if (op === "YEAR") {
-            if (Array.isArray(f.value)) {
-              const list = f.value
-                .map((v: any) => Number(v))
-                .filter((n: any) => !isNaN(n))
-                .join(", ");
-              return `EXTRACT(YEAR FROM ${fieldExpression}) IN (${list})`;
+          return buildAggregationFilterSqlClause(
+            { field: f.field, operator: op, value: f.value, cast: f.cast },
+            {
+              fieldExpression,
+              expandMonthValue: (field, value) =>
+                expandMonthValueWithYearFromFilters(field, value, validFilters),
             }
-            return `EXTRACT(YEAR FROM ${fieldExpression}) = ${Number(f.value)}`;
-          }
-          if (op === "DAY") {
-            const dayStr = String(f.value || "").trim();
-            if (!/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) return "TRUE";
-            return `${fieldExpression} = DATE '${dayStr}'`;
-          }
-          if (op === "QUARTER") {
-            if (Array.isArray(f.value)) {
-              const list = f.value
-                .map((v: any) => Number(v))
-                .filter((n: any) => !isNaN(n) && n >= 1 && n <= 4)
-                .join(", ");
-              if (!list) return "TRUE";
-              return `EXTRACT(QUARTER FROM ${fieldExpression}) IN (${list})`;
-            }
-            const q = Number(f.value);
-            if (isNaN(q) || q < 1 || q > 4) return "TRUE";
-            return `EXTRACT(QUARTER FROM ${fieldExpression}) = ${q}`;
-          }
-          if (op === "SEMESTER") {
-            const semExpr = `(CASE WHEN EXTRACT(MONTH FROM ${fieldExpression}) <= 6 THEN 1 ELSE 2 END)`;
-            if (Array.isArray(f.value)) {
-              const list = f.value
-                .map((v: any) => Number(v))
-                .filter((n: any) => !isNaN(n) && (n === 1 || n === 2))
-                .join(", ");
-              if (!list) return "TRUE";
-              return `${semExpr} IN (${list})`;
-            }
-            const s = Number(f.value);
-            if (isNaN(s) || (s !== 1 && s !== 2)) return "TRUE";
-            return `${semExpr} = ${s}`;
-          }
-          if (op === "YEAR_MONTH") {
-            return buildMonthFilterSqlClause(fieldExpression, f.value);
-          }
-          if (op === "IN") {
-            const list = (Array.isArray(f.value) ? f.value : [])
-              .map((x: any) => toSqlLiteral(x))
-              .join(", ");
-            if (!list) return "TRUE";
-            return `${fieldExpression} IN (${list})`;
-          }
-          if (op === "BETWEEN") {
-            let from: any, to: any;
-            if (Array.isArray(f.value)) [from, to] = f.value;
-            else if (f.value && typeof f.value === "object") {
-              from = (f.value as any).from;
-              to = (f.value as any).to;
-            }
-            return `${fieldExpression} BETWEEN ${toSqlLiteral(
-              from
-            )} AND ${toSqlLiteral(to)}`;
-          }
-          if ((op === "IS" || op === "IS NOT") && f.value === null)
-            return `"${safeField}" ${op} NULL`;
-
-          return `${fieldExpression} ${op} ${toSqlLiteral(f.value)}`;
+          );
         })
         .join(" AND ");
       if (whereClauses) query += ` WHERE ${whereClauses}`;

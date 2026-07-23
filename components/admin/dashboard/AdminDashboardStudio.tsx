@@ -23,6 +23,12 @@ import {
   isDashboardFilterDateField,
   resolveDashboardFilterOperator,
 } from "@/lib/dashboard/isDashboardFilterDateField";
+import {
+  reconcileFilterOperatorWithInputType,
+  resolveFilterInputType,
+  shouldApplyFilterAsIn,
+  normalizeLoadedGlobalFilter,
+} from "@/lib/dashboard/filterInputType";
 import { useAdminDashboardEtlData } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
 import { searchEtls, addDashboardDataSource, removeDashboardDataSource } from "@/app/admin/(main)/dashboard/actions";
@@ -84,9 +90,16 @@ import {
   type DashboardFixedGrid,
   computeDashboardGridPlacementsPacked,
   findFreeGridCell,
+  fixedGridsOverlap,
+  heightPxForRowSpan,
   minRowSpanForMinHeight,
+  packedPlacementToFixedGrid,
   placementsToFixedGridMap,
+  resolveManualDragDrop,
+  snapMinHeightToGrid,
   visualOrderFromFixedGrids,
+  DASHBOARD_GRID_COLUMN_COUNT,
+  DASHBOARD_GRID_ROW_GAP_PX_DEFAULT,
 } from "@/lib/dashboard/gridLayout";
 import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
 import {
@@ -406,27 +419,64 @@ function normalizeLoadedStudioWidget(
   cardLayoutMode: DashboardCardLayoutMode = "auto"
 ): StudioWidget {
   const normalized = normalizeLoadedDashboardWidget(w) as StudioWidget;
+  const gridSpan = clampGridSpan(normalized.gridSpan, 2);
+  let minHeight =
+    typeof normalized.minHeight === "number" && Number.isFinite(normalized.minHeight) && normalized.minHeight > 0
+      ? Math.round(normalized.minHeight)
+      : undefined;
+
   // En modo auto, gridSpan/minHeight son la fuente de verdad. Un fixedGrid
-  // stale (p. ej. de un snapshot previo) hace que al reabrir solo algunas
-  // tarjetas recuperen un tamaño incorrecto.
+  // stale hace que al reabrir solo algunas tarjetas recuperen un tamaño incorrecto.
+  // Si minHeight/gridSpan faltan, promocionamos desde fixedGrid antes de quitarlo.
   if (cardLayoutMode === "auto" && normalized.fixedGrid) {
+    const fg = clampDashboardFixedGrid(normalized.fixedGrid, DASHBOARD_GRID_COLUMN_COUNT);
     const { fixedGrid: _fg, ...without } = normalized;
-    return without as StudioWidget;
+    if (minHeight == null && fg.rowSpan > 0) {
+      minHeight = heightPxForRowSpan(fg.rowSpan);
+    }
+    return {
+      ...without,
+      gridSpan: normalized.gridSpan != null ? gridSpan : fg.colSpan,
+      ...(minHeight != null ? { minHeight } : {}),
+    } as StudioWidget;
   }
-  return normalized;
+
+  return {
+    ...normalized,
+    gridSpan,
+    ...(minHeight != null ? { minHeight } : {}),
+  } as StudioWidget;
 }
 
 /** Quita fixedGrid al persistir en modo auto para no congelar tamaños stale. */
 function stripFixedGridForAutoSave(
   widgets: StudioWidget[],
-  cardLayoutMode: DashboardCardLayoutMode
+  cardLayoutMode: DashboardCardLayoutMode,
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
 ): StudioWidget[] {
-  if (cardLayoutMode !== "auto") return widgets;
+  if (cardLayoutMode !== "auto") {
+    return widgets.map((w) => normalizePersistedWidgetSize(w, rowGapPx));
+  }
   return widgets.map((w) => {
-    if (!w.fixedGrid) return w;
-    const { fixedGrid: _fg, ...rest } = w;
+    const sized = normalizePersistedWidgetSize(w, rowGapPx);
+    if (!sized.fixedGrid) return sized;
+    const { fixedGrid: _fg, ...rest } = sized;
     return rest as StudioWidget;
   });
+}
+
+/** Garantiza gridSpan/minHeight numéricos al persistir (evita defaults distintos al reabrir). */
+function normalizePersistedWidgetSize(
+  w: StudioWidget,
+  rowGapPx: number = DASHBOARD_GRID_ROW_GAP_PX_DEFAULT
+): StudioWidget {
+  const gridSpan = clampGridSpan(w.gridSpan, w.type === "kpi" ? 1 : 2);
+  const rawMh =
+    typeof w.minHeight === "number" && Number.isFinite(w.minHeight) && w.minHeight > 0
+      ? w.minHeight
+      : 280;
+  const minHeight = snapMinHeightToGrid(rawMh, undefined, rowGapPx).minHeight;
+  return { ...w, gridSpan, minHeight };
 }
 
 /** Regenera config del canvas con la aggregationConfig/color actuales del widget (estilos del panel). */
@@ -504,6 +554,8 @@ export function AdminDashboardStudio({
     () => ({ ...EMPTY_DASHBOARD_COMPARE_DEFAULTS })
   );
   const [fiscalYearStartMonth, setFiscalYearStartMonth] = useState(DEFAULT_FISCAL_YEAR_START_MONTH);
+  /** Portada de la tarjeta en listados (admin / viewer). */
+  const [coverImageUrl, setCoverImageUrl] = useState("");
   const [dashboardSettingsOpen, setDashboardSettingsOpen] = useState(false);
   /** Valores en vivo de filtros globales (por id) y widgets tipo filter en el lienzo. */
   const [studioFilterValues, setStudioFilterValues] = useState<Record<string, unknown>>({});
@@ -551,6 +603,27 @@ export function AdminDashboardStudio({
   const widgetsRef = useRef<StudioWidget[]>([]);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const layoutPersistReadyRef = useRef(false);
+  /** Sube en cada edición; evita marcar limpio si hubo cambios durante un PUT. */
+  const dirtyEpochRef = useRef(0);
+  /** Encadena guardados para que un PUT viejo no pise tamaños más nuevos. */
+  const saveTailRef = useRef(Promise.resolve());
+  const layoutSaveStateRef = useRef({
+    cardLayoutMode: "auto" as DashboardCardLayoutMode,
+    dashboardTheme: { ...DEFAULT_DASHBOARD_THEME } as DashboardTheme,
+    pages: [{ id: "page-1", name: "Página 1" }] as StudioPage[],
+    activePageId: "page-1" as string | null,
+    savedMetrics: [] as SavedMetric[],
+    dashboardCompareDefaults: { ...EMPTY_DASHBOARD_COMPARE_DEFAULTS } as DashboardCompareDefaults,
+    fiscalYearStartMonth: DEFAULT_FISCAL_YEAR_START_MONTH,
+    coverImageUrl: "",
+    globalFilters: [] as GlobalFilter[],
+    etlData: null as {
+      etl?: { id?: string } | null;
+      dataSources?: Array<{ etlId?: string }> | null;
+      dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset;
+      datasetDimensions?: Record<string, Record<string, string>>;
+    } | null,
+  });
   const resizeStateRef = useRef<{
     widgetId: string;
     edge: string;
@@ -633,6 +706,7 @@ export function AdminDashboardStudio({
             cardLayoutMode?: DashboardCardLayoutMode;
             dashboardCompareDefaults?: DashboardCompareDefaults;
             fiscalYearStartMonth?: number;
+            coverImageUrl?: string;
           };
         }).layout;
         const loadedGlobalFilters = (data as unknown as { global_filters_config?: GlobalFilter[] }).global_filters_config || [];
@@ -651,6 +725,7 @@ export function AdminDashboardStudio({
             datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] };
             dashboardCompareDefaults?: DashboardCompareDefaults;
             fiscalYearStartMonth?: number;
+            coverImageUrl?: string;
           };
           if (Array.isArray(layout.pages) && layout.pages.length > 0) {
             loadedPages = layout.pages;
@@ -684,7 +759,22 @@ export function AdminDashboardStudio({
         }
         if (!cancelled) {
           setWidgets(loadedWidgets);
-          setGlobalFilters(Array.isArray(loadedGlobalFilters) ? loadedGlobalFilters : []);
+          setGlobalFilters(
+            Array.isArray(loadedGlobalFilters)
+              ? loadedGlobalFilters.map((f) => {
+                  const inputType = resolveFilterInputType(f);
+                  const isDate = isDashboardFilterDateField(f.field, {
+                    inputType,
+                    // Al hidratar el layout aún puede no haber etlData; sin metadata date
+                    // no tratar el campo como fecha (evita nivel temporal por nombre).
+                  });
+                  return normalizeLoadedGlobalFilter(
+                    { ...f, inputType },
+                    isDate
+                  ) as GlobalFilter;
+                })
+              : []
+          );
           setDashboardTheme(loadedTheme);
           setPages(loadedPages);
           setActivePageId(loadedActivePageId);
@@ -693,6 +783,7 @@ export function AdminDashboardStudio({
             datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] };
             dashboardCompareDefaults?: DashboardCompareDefaults;
             fiscalYearStartMonth?: number;
+            coverImageUrl?: string;
           } | undefined;
           setSavedMetrics(Array.isArray(layout?.savedMetrics) ? layout.savedMetrics : []);
           setDerivedColumnsFromLayout(Array.isArray(layout?.datasetConfig?.derivedColumns) ? layout.datasetConfig.derivedColumns : []);
@@ -702,6 +793,7 @@ export function AdminDashboardStudio({
               : { ...EMPTY_DASHBOARD_COMPARE_DEFAULTS }
           );
           setFiscalYearStartMonth(normalizeFiscalYearStartMonth(layout?.fiscalYearStartMonth));
+          setCoverImageUrl(typeof layout?.coverImageUrl === "string" ? layout.coverImageUrl.trim() : "");
           setLayoutLoaded(true);
         }
       } catch (e) {
@@ -770,77 +862,136 @@ export function AdminDashboardStudio({
     };
   }, [layoutLoaded, etlData, etlLoading, etlError]);
 
+  const markDirty = useCallback(() => {
+    dirtyEpochRef.current += 1;
+    setIsDirty(true);
+  }, []);
+
   const saveDashboard = useCallback(async (overrides?: { widgets?: StudioWidget[]; silent?: boolean }) => {
-    setIsSaving(true);
-    try {
-      const widgetsToSave = stripFixedGridForAutoSave(
-        overrides?.widgets ?? widgetsRef.current,
-        cardLayoutMode
-      );
-      const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, diagnosticPreview, ...rest }) => {
-        const agg = (rest.aggregationConfig ?? {}) as Record<string, unknown>;
-        const dashboardVisualOverrides = extractDashboardWidgetOverrides(agg);
-        return {
-          ...rest,
-          ...(Object.keys(dashboardVisualOverrides).length > 0 ? { dashboardVisualOverrides } : {}),
-        };
-      });
-      let datasetConfig: { derivedColumns: { name: string; expression: string; defaultAggregation: string }[] } | undefined;
-      const etlId = etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId;
-      if (etlId) {
-        try {
-          const metricsRes = await fetch(`/api/etl/${etlId}/metrics`);
-          const metricsJson = await safeJsonResponse<{ ok?: boolean; data?: { datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } } }>(metricsRes);
-          if (metricsJson?.ok && Array.isArray(metricsJson?.data?.datasetConfig?.derivedColumns) && metricsJson.data.datasetConfig.derivedColumns.length > 0) {
-            datasetConfig = { derivedColumns: metricsJson.data.datasetConfig.derivedColumns };
+    const run = async () => {
+      const state = layoutSaveStateRef.current;
+      const epochAtStart = dirtyEpochRef.current;
+      let savedOk = false;
+      setIsSaving(true);
+      try {
+        const widgetsToSave = stripFixedGridForAutoSave(
+          overrides?.widgets ?? widgetsRef.current,
+          state.cardLayoutMode
+        );
+        const cleanWidgets = widgetsToSave.map(({ rows, config, columns, facetValues, diagnosticPreview, ...rest }) => {
+          const agg = (rest.aggregationConfig ?? {}) as Record<string, unknown>;
+          const dashboardVisualOverrides = extractDashboardWidgetOverrides(agg);
+          return {
+            ...rest,
+            ...(Object.keys(dashboardVisualOverrides).length > 0 ? { dashboardVisualOverrides } : {}),
+          };
+        });
+        let datasetConfig: { derivedColumns: { name: string; expression: string; defaultAggregation: string }[] } | undefined;
+        const etlId = state.etlData?.etl?.id ?? state.etlData?.dataSources?.[0]?.etlId;
+        if (etlId) {
+          try {
+            const metricsRes = await fetch(`/api/etl/${etlId}/metrics`);
+            const metricsJson = await safeJsonResponse<{ ok?: boolean; data?: { datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } } }>(metricsRes);
+            if (metricsJson?.ok && Array.isArray(metricsJson?.data?.datasetConfig?.derivedColumns) && metricsJson.data.datasetConfig.derivedColumns.length > 0) {
+              datasetConfig = { derivedColumns: metricsJson.data.datasetConfig.derivedColumns };
+            }
+          } catch {
+            // ignore
           }
-        } catch {
-          // ignore
         }
+        const layoutPayload = {
+          widgets: cleanWidgets,
+          theme: state.dashboardTheme,
+          pages: state.pages,
+          activePageId: state.activePageId,
+          cardLayoutMode: state.cardLayoutMode,
+          savedMetrics: state.savedMetrics,
+          dashboardCompareDefaults: state.dashboardCompareDefaults,
+          fiscalYearStartMonth: normalizeFiscalYearStartMonth(state.fiscalYearStartMonth),
+          ...(state.coverImageUrl.trim() ? { coverImageUrl: state.coverImageUrl.trim() } : {}),
+          ...(datasetConfig && { datasetConfig }),
+          ...(state.etlData?.dashboardDataset && {
+            dashboardDataset: state.etlData.dashboardDataset,
+          }),
+          ...(state.etlData?.datasetDimensions && {
+            datasetDimensions: state.etlData.datasetDimensions,
+          }),
+        };
+        const res = await fetch(`/api/dashboard/${dashboardId}/layout`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            layout: layoutPayload,
+            global_filters_config: state.globalFilters,
+          }),
+        });
+        const json = await safeJsonResponse(res);
+        if (!res.ok || !json.ok) {
+          throw new Error(json.error ?? "No se pudo guardar");
+        }
+        if (datasetConfig) setDerivedColumnsFromLayout(datasetConfig.derivedColumns);
+        setLastSavedAt(new Date());
+        savedOk = true;
+        // Solo marcar limpio si no hubo ediciones (p. ej. resize) durante el PUT.
+        if (dirtyEpochRef.current === epochAtStart) {
+          setIsDirty(false);
+        }
+        if (!overrides?.silent) toast.success("Guardado");
+      } catch (e: unknown) {
+        toast.error(e instanceof Error ? e.message : "No se pudo guardar");
+      } finally {
+        setIsSaving(false);
       }
-      const layoutPayload = {
-        widgets: cleanWidgets,
-        theme: dashboardTheme,
-        pages,
-        activePageId,
-        cardLayoutMode,
-        savedMetrics,
-        dashboardCompareDefaults,
-        fiscalYearStartMonth: normalizeFiscalYearStartMonth(fiscalYearStartMonth),
-        ...(datasetConfig && { datasetConfig }),
-        ...((etlData as { dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset })?.dashboardDataset && {
-          dashboardDataset: (etlData as { dashboardDataset: import("@/lib/dashboard/dashboardDataset").DashboardDataset }).dashboardDataset,
-        }),
-        ...((etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions && {
-          datasetDimensions: (etlData as { datasetDimensions: Record<string, Record<string, string>> }).datasetDimensions,
-        }),
-      };
-      const res = await fetch(`/api/dashboard/${dashboardId}/layout`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          layout: layoutPayload,
-          global_filters_config: globalFilters,
-        }),
-      });
-      const json = await safeJsonResponse(res);
-      if (!res.ok || !json.ok) {
-        throw new Error(json.error ?? "No se pudo guardar");
+      // Si se editó durante el PUT, re-guardar de inmediato con el estado actual.
+      if (savedOk && dirtyEpochRef.current !== epochAtStart) {
+        void saveDashboard({ silent: true });
       }
-      if (datasetConfig) setDerivedColumnsFromLayout(datasetConfig.derivedColumns);
-      setLastSavedAt(new Date());
-      setIsDirty(false);
-      if (!overrides?.silent) toast.success("Guardado");
-    } catch (e: unknown) {
-      toast.error(e instanceof Error ? e.message : "No se pudo guardar");
-    } finally {
-      setIsSaving(false);
-    }
-  }, [globalFilters, dashboardTheme, dashboardId, pages, activePageId, cardLayoutMode, savedMetrics, dashboardCompareDefaults, fiscalYearStartMonth, etlData?.etl?.id, etlData?.dataSources]);
+    };
+
+    const p = saveTailRef.current.then(run, run);
+    saveTailRef.current = p.then(
+      () => undefined,
+      () => undefined
+    );
+    return p;
+  }, [dashboardId]);
 
   useEffect(() => {
     widgetsRef.current = widgets;
   }, [widgets]);
+
+  useEffect(() => {
+    layoutSaveStateRef.current = {
+      cardLayoutMode,
+      dashboardTheme,
+      pages,
+      activePageId,
+      savedMetrics,
+      dashboardCompareDefaults,
+      fiscalYearStartMonth,
+      coverImageUrl,
+      globalFilters,
+      etlData: etlData
+        ? {
+            etl: etlData.etl,
+            dataSources: etlData.dataSources,
+            dashboardDataset: (etlData as { dashboardDataset?: import("@/lib/dashboard/dashboardDataset").DashboardDataset }).dashboardDataset,
+            datasetDimensions: (etlData as { datasetDimensions?: Record<string, Record<string, string>> }).datasetDimensions,
+          }
+        : null,
+    };
+  }, [
+    cardLayoutMode,
+    dashboardTheme,
+    pages,
+    activePageId,
+    savedMetrics,
+    dashboardCompareDefaults,
+    fiscalYearStartMonth,
+    coverImageUrl,
+    globalFilters,
+    etlData,
+  ]);
 
   useEffect(() => {
     if (layoutLoaded) layoutPersistReadyRef.current = true;
@@ -877,9 +1028,9 @@ export function AdminDashboardStudio({
       if (existing) return prev.map((s) => (s.id === existing.id ? { ...s, name: trimmed, metric } : s));
       return [...prev, entry];
     });
-    setIsDirty(true);
+    markDirty();
     toast.success(`Métrica "${trimmed}" guardada para reutilizar`);
-  }, []);
+  }, [markDirty]);
 
   const getTableName = useCallback(
     async (widget?: StudioWidget | null): Promise<string | null> => {
@@ -909,8 +1060,16 @@ export function AdminDashboardStudio({
 
   const loadMetricData = useCallback(
     async (widgetId: string) => {
-      const widget = widgets.find((w) => w.id === widgetId);
-      if (!widget || !etlData) return;
+      const widget = widgetsRef.current.find((w) => w.id === widgetId);
+      if (!widget) {
+        // Evitar spinner eterno si el id no está en el estado actual (p. ej. closure stale).
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        return;
+      }
+      if (!etlData) {
+        setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
+        return;
+      }
       const analysisPatch = resolveWidgetAnalysisMergePatch(
         widget as Record<string, unknown>,
         savedAnalyses as Parameters<typeof resolveWidgetAnalysisMergePatch>[1],
@@ -965,10 +1124,11 @@ export function AdminDashboardStudio({
           return etlData?.datasetDimensions?.[field]?.[sourceId] ?? field;
         };
         const datasetDimensions = etlData?.datasetDimensions;
+        const liveWidgets = widgetsRef.current;
         const pageOf = (w: StudioWidget) => w.pageId ?? activePageId ?? "page-1";
         const targetPage = pageOf(effectiveWidget);
         const fieldsWithWidgets = new Set(
-          widgets
+          liveWidgets
             .filter(
               (w) =>
                 w.type === "filter" &&
@@ -982,7 +1142,7 @@ export function AdminDashboardStudio({
           ...Object.fromEntries(globalFilters.map((x) => [x.id, x.value])),
           ...studioFilterValues,
         };
-        const filterWidgetsOnPage = widgets.filter(
+        const filterWidgetsOnPage = liveWidgets.filter(
           (w) =>
             w.type === "filter" &&
             pageOf(w) === targetPage &&
@@ -1038,14 +1198,16 @@ export function AdminDashboardStudio({
             });
             if (physicalField == null) continue;
             const useIn =
-              rawOp === "IN" ||
-              (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
-                inputT === "multi" &&
-                Array.isArray(v) &&
-                v.length > 0);
+              !DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
+              shouldApplyFilterAsIn({
+                operator: rawOp,
+                inputType: inputT,
+                value: v,
+                isDateMultiValueOperator: DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper),
+              });
             const op = useIn ? "IN" : rawOp;
             const value: unknown =
-              op === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+              op === "IN" ? (Array.isArray(v) ? v : [v]) : Array.isArray(v) && inputT !== "multi" ? v[0] : v;
             mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
           }
         }
@@ -1092,13 +1254,22 @@ export function AdminDashboardStudio({
           });
           if (physicalFw == null) continue;
           const useInFw =
-            rawOpFw === "IN" ||
-            (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper) &&
-              fc.inputType === "multi" &&
-              Array.isArray(v) &&
-              v.length > 0);
+            !DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper) &&
+            shouldApplyFilterAsIn({
+              operator: rawOpFw,
+              inputType: fc.inputType,
+              value: v,
+              isDateMultiValueOperator: DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper),
+            });
           const opFw = useInFw ? "IN" : rawOpFw;
-          const valueFw: unknown = opFw === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+          const valueFw: unknown =
+            opFw === "IN"
+              ? Array.isArray(v)
+                ? v
+                : [v]
+              : Array.isArray(v) && fc.inputType !== "multi"
+                ? v[0]
+                : v;
           mappedGlobalFilters.push({
             id: fw.id,
             field: physicalFw,
@@ -1427,7 +1598,7 @@ export function AdminDashboardStudio({
         setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
       }
     },
-    [widgets, etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId, dashboardCompareDefaults, fiscalYearStartMonth]
+    [etlData, globalFilters, studioFilterValues, getTableName, derivedColumnsFromLayout, savedMetrics, savedAnalyses, activePageId, dashboardCompareDefaults, fiscalYearStartMonth]
   );
 
   useEffect(() => {
@@ -1471,7 +1642,7 @@ export function AdminDashboardStudio({
       });
       return changed ? next : prev;
     });
-    if (markedDirty) setIsDirty(true);
+    if (markedDirty) markDirty();
     if (toReload.length > 0 && etlData && !etlLoading) {
       const t = window.setTimeout(() => {
         toReload.forEach((id) => void loadMetricData(id));
@@ -1524,7 +1695,7 @@ export function AdminDashboardStudio({
   );
 
   const widgetsForCurrentPage = widgets.filter((w) => (w.pageId ?? "page-1") === activePageId);
-  const { packCols, packRowGapPx } = useDashboardPackLayout("studio");
+  const { packCols, packRowGapPx, packColGapPx } = useDashboardPackLayout("studio");
 
   const placeNewWidgetOnCanvas = useCallback(
     (w: StudioWidget): StudioWidget => {
@@ -1622,7 +1793,7 @@ export function AdminDashboardStudio({
           applyTo: "all",
         },
       ]);
-      setIsDirty(true);
+      markDirty();
     },
     [etlData, derivedColumnsFromLayout, filterDateFieldCtx]
   );
@@ -1870,27 +2041,10 @@ export function AdminDashboardStudio({
               : w
           )
         : [...widgets, placeNewWidgetOnCanvas({ ...newWidget, isLoading: shouldLoadImmediately })];
-      setWidgets((prev) =>
-        existing
-          ? prev.map((w) =>
-              w.id === existing.id
-                ? {
-                    ...w,
-                    type: newWidget.type,
-                    title: newWidget.title,
-                    metricId: saved.id,
-                    aggregationConfig: newWidget.aggregationConfig,
-                    dataSourceId: newWidget.dataSourceId,
-                    config: undefined,
-                    rows: undefined,
-                    isLoading: shouldLoadImmediately,
-                  }
-                : w
-            )
-          : [...prev, placeNewWidgetOnCanvas({ ...newWidget, isLoading: shouldLoadImmediately })]
-      );
+      setWidgets(newWidgets);
+      widgetsRef.current = newWidgets;
       setSelectedId(null);
-      setIsDirty(true);
+      markDirty();
       // Persistir alta/actualización para que no se pierda al refrescar.
       saveDashboard({ widgets: newWidgets });
       setAddMetricOpen(false);
@@ -1928,30 +2082,10 @@ export function AdminDashboardStudio({
               : w
           )
         : [...widgets, placeNewWidgetOnCanvas({ ...newWidget, isLoading: shouldLoadImmediately })];
-      setWidgets((prev) =>
-        existing
-          ? prev.map((w) =>
-              w.id === existing.id
-                ? {
-                    ...w,
-                    type: newWidget.type,
-                    title: newWidget.title,
-                    analysisId: analysis.id,
-                    metricIds: [...(analysis.metricIds || [])],
-                    aggregationConfig: newWidget.aggregationConfig,
-                    dataSourceId: newWidget.dataSourceId,
-                    labelDisplayMode: newWidget.labelDisplayMode,
-                    minHeight: newWidget.minHeight ?? w.minHeight,
-                    config: undefined,
-                    rows: undefined,
-                    isLoading: shouldLoadImmediately,
-                  }
-                : w
-            )
-          : [...prev, placeNewWidgetOnCanvas({ ...newWidget, isLoading: shouldLoadImmediately })]
-      );
+      setWidgets(newWidgets);
+      widgetsRef.current = newWidgets;
       setSelectedId(null);
-      setIsDirty(true);
+      markDirty();
       // Persistir alta/actualización para que no se pierda al refrescar.
       saveDashboard({ widgets: newWidgets });
       setAddMetricOpen(false);
@@ -1997,7 +2131,7 @@ export function AdminDashboardStudio({
     const newWidgets = [...widgets, placed];
     setWidgets(newWidgets);
     setSelectedId(placed.id);
-    setIsDirty(true);
+    markDirty();
     void saveDashboard({ widgets: newWidgets });
   }, [widgets, activePageId, saveDashboard, placeNewWidgetOnCanvas]);
 
@@ -2011,7 +2145,7 @@ export function AdminDashboardStudio({
     const newWidgets = widgets.filter((w) => w.id !== widgetId).map((w, i) => ({ ...w, gridOrder: i }));
     setWidgets(newWidgets);
     if (selectedId === widgetId) setSelectedId(null);
-    setIsDirty(true);
+    markDirty();
     // Persistir en el servidor para que al refrescar la métrica siga eliminada
     saveDashboard({ widgets: newWidgets });
   }, [selectedId, widgets, saveDashboard]);
@@ -2072,7 +2206,7 @@ export function AdminDashboardStudio({
 
   const updateTheme = useCallback((patch: Partial<DashboardTheme>) => {
     setDashboardTheme((prev) => ({ ...prev, ...patch }));
-    setIsDirty(true);
+    markDirty();
   }, []);
 
   const reconcileManualFixedGrid = useCallback(
@@ -2082,7 +2216,7 @@ export function AdminDashboardStudio({
       cols: number,
       rowGapPx: number,
       pageWidgets: StudioWidget[]
-    ): DashboardFixedGrid | undefined => {
+    ): DashboardFixedGrid => {
       const span = clampGridSpan(patch.gridSpan ?? w.gridSpan, 2);
       const mh = patch.minHeight ?? w.minHeight ?? 280;
       const rowSpan = minRowSpanForMinHeight(mh, undefined, rowGapPx);
@@ -2091,8 +2225,18 @@ export function AdminDashboardStudio({
         ? clampDashboardFixedGrid(w.fixedGrid, cols)
         : { col: 1, row: 1, colSpan: span, rowSpan };
       const cell = findFreeGridCell(occ, span, rowSpan, prefer.col, prefer.row);
-      if (!cell) return undefined;
-      return { col: cell.col, row: cell.row, colSpan: span, rowSpan };
+      if (cell) {
+        return { col: cell.col, row: cell.row, colSpan: span, rowSpan };
+      }
+      // Si no hay hueco libre, igual sincronizamos el tamaño in-place para que
+      // fixedGrid.rowSpan/colSpan no queden desfasados de minHeight/gridSpan
+      // (el viewer usa fixedGrid; el studio también aplica minHeight en CSS).
+      return {
+        col: prefer.col,
+        row: prefer.row,
+        colSpan: span,
+        rowSpan,
+      };
     },
     []
   );
@@ -2104,12 +2248,20 @@ export function AdminDashboardStudio({
         const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
         const updated = prev.map((w) => {
           if (w.id !== widgetId) return w;
-          let next: StudioWidget = { ...w, ...patch };
+          const sizePatch = { ...patch };
+          if (sizePatch.minHeight != null) {
+            // Snap con gap default (el mismo al persistir) para que al reabrir no cambie la altura.
+            sizePatch.minHeight = snapMinHeightToGrid(sizePatch.minHeight).minHeight;
+          }
+          if (sizePatch.gridSpan != null) {
+            sizePatch.gridSpan = clampGridSpan(sizePatch.gridSpan, w.gridSpan ?? 2);
+          }
+          let next: StudioWidget = { ...w, ...sizePatch };
           if (cardLayoutMode === "manual") {
-            const fg = reconcileManualFixedGrid(next, patch, packCols, packRowGapPx, pageWs);
-            if (fg) next.fixedGrid = fg;
-            if (patch.gridSpan != null) next.gridSpan = patch.gridSpan;
-            if (patch.minHeight != null) next.minHeight = patch.minHeight;
+            const fg = reconcileManualFixedGrid(next, sizePatch, packCols, packRowGapPx, pageWs);
+            next.fixedGrid = fg;
+            if (sizePatch.gridSpan != null) next.gridSpan = sizePatch.gridSpan;
+            if (sizePatch.minHeight != null) next.minHeight = sizePatch.minHeight;
           } else if (next.fixedGrid) {
             const { fixedGrid: _fg, ...rest } = next;
             next = rest as StudioWidget;
@@ -2117,11 +2269,13 @@ export function AdminDashboardStudio({
           return next;
         });
         // En auto no snapshotear fixedGrid: el packer lo prioriza sobre gridSpan/minHeight.
-        return cardLayoutMode === "manual" ? snapshotPageFixedGrids(updated, pageId) : updated;
+        const nextWidgets = cardLayoutMode === "manual" ? snapshotPageFixedGrids(updated, pageId) : updated;
+        widgetsRef.current = nextWidgets;
+        return nextWidgets;
       });
-      setIsDirty(true);
+      markDirty();
     },
-    [activePageId, cardLayoutMode, packCols, packRowGapPx, reconcileManualFixedGrid, snapshotPageFixedGrids]
+    [activePageId, cardLayoutMode, packCols, packRowGapPx, reconcileManualFixedGrid, snapshotPageFixedGrids, markDirty]
   );
 
   const [resizingWidgetId, setResizingWidgetId] = useState<string | null>(null);
@@ -2132,16 +2286,24 @@ export function AdminDashboardStudio({
     document.body.style.cursor = cursor;
     document.body.style.userSelect = "none";
     const onMove = (e: PointerEvent) => {
+      const el = studioBlocksRef.current;
+      const rect = el?.getBoundingClientRect();
+      const gapsTotal = Math.max(0, packCols - 1) * packColGapPx;
+      const colWidth =
+        rect && rect.width > 0
+          ? Math.max(1, (rect.width - gapsTotal) / packCols)
+          : 60;
       const dx = e.clientX - state.startX;
       const dy = e.clientY - state.startY;
       let gridSpan: number | undefined;
       let minHeight: number | undefined;
       if (state.edge === "e" || state.edge === "se") {
-        const spanDelta = Math.round(dx / 60);
+        const spanDelta = Math.round(dx / colWidth);
         gridSpan = clampGridSpan(state.startSpan + spanDelta, state.startSpan);
       }
       if (state.edge === "s" || state.edge === "se") {
-        minHeight = Math.min(900, Math.max(200, state.startMinHeight + dy));
+        const raw = Math.max(120, state.startMinHeight + dy);
+        minHeight = snapMinHeightToGrid(raw, undefined, packRowGapPx).minHeight;
       }
       updateWidgetSize(state.widgetId, { ...(gridSpan != null && { gridSpan }), ...(minHeight != null && { minHeight }) });
     };
@@ -2150,6 +2312,11 @@ export function AdminDashboardStudio({
       setResizingWidgetId(null);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      // Persistir el tamaño final sin esperar el debounce de 900ms.
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => {
+        void saveDashboard({ silent: true });
+      }, 150);
     };
     window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("pointerup", onUp);
@@ -2161,13 +2328,13 @@ export function AdminDashboardStudio({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [resizingWidgetId, updateWidgetSize]);
+  }, [resizingWidgetId, updateWidgetSize, saveDashboard, packCols, packColGapPx, packRowGapPx]);
 
   const addPage = useCallback(() => {
     const id = `page-${Date.now()}`;
     setPages((prev) => [...prev, { id, name: "Nueva página" }]);
     setActivePageId(id);
-    setIsDirty(true);
+    markDirty();
   }, []);
 
   const deletePage = useCallback(
@@ -2179,14 +2346,14 @@ export function AdminDashboardStudio({
         const next = pages.find((p) => p.id !== pageId);
         setActivePageId(next?.id ?? null);
       }
-      setIsDirty(true);
+      markDirty();
     },
     [pages, activePageId]
   );
 
   const renamePage = useCallback((pageId: string, name: string) => {
     setPages((prev) => prev.map((p) => (p.id === pageId ? { ...p, name: name.trim() || p.name } : p)));
-    setIsDirty(true);
+    markDirty();
   }, []);
 
   const sortedWidgets = useMemo(
@@ -2260,55 +2427,113 @@ export function AdminDashboardStudio({
         );
       }
       setCardLayoutMode(next);
-      setIsDirty(true);
+      markDirty();
     },
     [cardLayoutMode, activePageId, sortedWidgets, packCols, packRowGapPx, widgets]
   );
 
   const reorganizeAutoLayout = useCallback(() => {
     applyAutoLayoutToPage(activePageId ?? "page-1", true);
-    setIsDirty(true);
+    markDirty();
     toast.success("Tarjetas reorganizadas");
   }, [activePageId, applyAutoLayoutToPage]);
 
-  const updateWidgetFixedGrid = useCallback(
+  const updateWidgetFixedGridLive = useCallback(
     (widgetId: string, preferCol: number, preferRow: number) => {
+      setWidgets((prev) => {
+        const target = prev.find((w) => w.id === widgetId);
+        const fallback =
+          dragStateRef.current?.widgetId === widgetId ? dragStateRef.current.startFixedGrid : null;
+        const source = target?.fixedGrid ?? fallback;
+        if (!source) return prev;
+        const live = clampDashboardFixedGrid(source, packCols);
+        const col = Math.max(1, Math.min(packCols - live.colSpan + 1, preferCol));
+        const row = Math.max(1, preferRow);
+        if (target?.fixedGrid && live.col === col && live.row === row) return prev;
+        // Durante el arrastre permitimos solape temporal; al soltar se resuelve con swap/celda libre.
+        return prev.map((w) =>
+          w.id === widgetId ? { ...w, fixedGrid: { ...live, col, row }, zIndex: 40 } : w
+        );
+      });
+    },
+    [packCols]
+  );
+
+  const commitWidgetFixedGridDrop = useCallback(
+    (widgetId: string, preferCol: number, preferRow: number, origin: DashboardFixedGrid) => {
       const pageId = activePageId ?? "page-1";
       setWidgets((prev) => {
         const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
-        const target = pageWs.find((w) => w.id === widgetId);
-        if (!target?.fixedGrid) return prev;
-        const fg0 = clampDashboardFixedGrid(target.fixedGrid, packCols);
-        const occ = buildOccupancyExcluding(pageWs, widgetId, packCols);
-        const cell = findFreeGridCell(occ, fg0.colSpan, fg0.rowSpan, preferCol, preferRow);
-        if (!cell) return prev;
-        const fg: DashboardFixedGrid = { ...fg0, col: cell.col, row: cell.row };
-        return prev.map((w) => (w.id === widgetId ? { ...w, fixedGrid: fg } : w));
+        const updates = resolveManualDragDrop(pageWs, widgetId, preferCol, preferRow, packCols, origin);
+        if (updates.length === 0) {
+          return prev.map((w) => {
+            if (w.id !== widgetId) return w;
+            const current = w.fixedGrid ? clampDashboardFixedGrid(w.fixedGrid, packCols) : null;
+            const others = pageWs.filter((x) => x.id !== widgetId && x.fixedGrid);
+            const overlaps =
+              current != null &&
+              others.some((o) =>
+                fixedGridsOverlap(current, clampDashboardFixedGrid(o.fixedGrid!, packCols))
+              );
+            return {
+              ...w,
+              ...(overlaps ? { fixedGrid: clampDashboardFixedGrid(origin, packCols) } : {}),
+              zIndex: undefined,
+            };
+          });
+        }
+        const byId = new Map(updates.map((u) => [u.id, u.fixedGrid]));
+        return prev.map((w) => {
+          const fg = byId.get(w.id);
+          if (!fg) {
+            return w.id === widgetId && w.zIndex === 40 ? { ...w, zIndex: undefined } : w;
+          }
+          return {
+            ...w,
+            fixedGrid: fg,
+            zIndex: w.id === widgetId ? undefined : w.zIndex,
+          };
+        });
       });
-      setIsDirty(true);
+      markDirty();
     },
-    [activePageId, packCols]
+    [activePageId, packCols, markDirty]
   );
 
   useEffect(() => {
     if (!draggingWidgetId || !dragStateRef.current) return;
     const state = dragStateRef.current;
+    let lastPrefer = { col: state.startFixedGrid.col, row: state.startFixedGrid.row };
     document.body.style.cursor = "grabbing";
     document.body.style.userSelect = "none";
     const onMove = (e: PointerEvent) => {
       const el = studioBlocksRef.current;
       if (!el) return;
       const rect = el.getBoundingClientRect();
-      const { col, row } = clientPointToGridCell(e.clientX, e.clientY, rect, packCols, undefined, packRowGapPx);
+      const { col, row } = clientPointToGridCell(
+        e.clientX,
+        e.clientY,
+        rect,
+        packCols,
+        undefined,
+        packRowGapPx,
+        packColGapPx
+      );
       const fg0 = state.startFixedGrid;
       const preferCol = Math.max(1, Math.min(packCols - fg0.colSpan + 1, col));
-      updateWidgetFixedGrid(state.widgetId, preferCol, row);
+      lastPrefer = { col: preferCol, row };
+      updateWidgetFixedGridLive(state.widgetId, preferCol, row);
     };
     const onUp = () => {
+      commitWidgetFixedGridDrop(state.widgetId, lastPrefer.col, lastPrefer.row, state.startFixedGrid);
       dragStateRef.current = null;
       setDraggingWidgetId(null);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      autoSaveTimerRef.current = setTimeout(() => {
+        void saveDashboard({ silent: true });
+      }, 200);
     };
     window.addEventListener("pointermove", onMove, { passive: true });
     window.addEventListener("pointerup", onUp);
@@ -2320,7 +2545,15 @@ export function AdminDashboardStudio({
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [draggingWidgetId, packCols, packRowGapPx, updateWidgetFixedGrid]);
+  }, [
+    draggingWidgetId,
+    packCols,
+    packRowGapPx,
+    packColGapPx,
+    updateWidgetFixedGridLive,
+    commitWidgetFixedGridDrop,
+    saveDashboard,
+  ]);
 
   const moveWidgetGridOrder = useCallback(
     (widgetId: string, direction: -1 | 1) => {
@@ -2342,7 +2575,7 @@ export function AdminDashboardStudio({
           return x;
         });
       });
-      setIsDirty(true);
+      markDirty();
     },
     [activePageId]
   );
@@ -2361,10 +2594,26 @@ export function AdminDashboardStudio({
       if (!selectedId) return;
       const { imageConfig: patchImg, aggregationConfig: aggDelta, ...restPatch } = patch;
       const aggPatch = aggDelta as Record<string, unknown> | undefined;
-      const layoutSizePatch =
+      let layoutSizePatch: { gridSpan?: number; minHeight?: number } | null =
         patch.gridSpan != null || patch.minHeight != null
           ? { gridSpan: patch.gridSpan, minHeight: patch.minHeight }
           : null;
+      if (layoutSizePatch) {
+        if (layoutSizePatch.minHeight != null) {
+          layoutSizePatch = {
+            ...layoutSizePatch,
+            minHeight: snapMinHeightToGrid(layoutSizePatch.minHeight).minHeight,
+          };
+          (restPatch as { minHeight?: number }).minHeight = layoutSizePatch.minHeight;
+        }
+        if (layoutSizePatch.gridSpan != null) {
+          layoutSizePatch = {
+            ...layoutSizePatch,
+            gridSpan: clampGridSpan(layoutSizePatch.gridSpan, 2),
+          };
+          (restPatch as { gridSpan?: number }).gridSpan = layoutSizePatch.gridSpan;
+        }
+      }
       setWidgets((prev) => {
         const pageId = activePageId ?? "page-1";
         const pageWs = prev.filter((x) => (x.pageId ?? "page-1") === pageId);
@@ -2374,7 +2623,7 @@ export function AdminDashboardStudio({
           if (layoutSizePatch) {
             if (cardLayoutMode === "manual") {
               const fg = reconcileManualFixedGrid(next, layoutSizePatch, packCols, packRowGapPx, pageWs);
-              if (fg) next.fixedGrid = fg;
+              next.fixedGrid = fg;
             } else if (next.fixedGrid) {
               const { fixedGrid: _fg, ...rest } = next;
               next = rest as StudioWidget;
@@ -2406,7 +2655,18 @@ export function AdminDashboardStudio({
             next.dashboardVisualOverrides =
               Object.keys(visuals).length > 0 ? visuals : undefined;
           }
-          if (aggDelta != null || percentLayoutPatch || "color" in restPatch) {
+          // Mantener chartPrimaryColor alineado con el color del widget (buildChartConfig / uniform).
+          if ("color" in restPatch) {
+            const nextColor = typeof restPatch.color === "string" ? restPatch.color.trim() : "";
+            next.aggregationConfig = {
+              ...(next.aggregationConfig ?? w.aggregationConfig ?? { enabled: false, metrics: [] }),
+              chartPrimaryColor: nextColor !== "" ? nextColor : undefined,
+            } as AggregationConfig;
+            const visuals = extractDashboardWidgetOverrides(next.aggregationConfig as Record<string, unknown>);
+            next.dashboardVisualOverrides =
+              Object.keys(visuals).length > 0 ? visuals : undefined;
+          }
+          if (aggDelta != null || percentLayoutPatch || "color" in restPatch || "labelDisplayMode" in patch) {
             const rows = w.rows;
             if (
               !NON_CHART_STUDIO_TYPES.has(w.type) &&
@@ -2423,11 +2683,14 @@ export function AdminDashboardStudio({
           }
           return next;
         });
-        return layoutSizePatch && cardLayoutMode === "manual"
-          ? snapshotPageFixedGrids(mapped, pageId)
-          : mapped;
+        const nextWidgets =
+          layoutSizePatch && cardLayoutMode === "manual"
+            ? snapshotPageFixedGrids(mapped, pageId)
+            : mapped;
+        widgetsRef.current = nextWidgets;
+        return nextWidgets;
       });
-      setIsDirty(true);
+      markDirty();
 
       if (aggPatch && shouldRefetchWidgetOnAggregationPatch(aggPatch)) {
         const widgetId = selectedId;
@@ -2446,6 +2709,7 @@ export function AdminDashboardStudio({
       packRowGapPx,
       reconcileManualFixedGrid,
       snapshotPageFixedGrids,
+      markDirty,
     ]
   );
 
@@ -2472,6 +2736,24 @@ export function AdminDashboardStudio({
     }
     setSelectedId(null);
   }, [isDirty, saveDashboard]);
+
+  // Al salir de la página, forzar guardado de tamaños pendientes (evita perder el último resize).
+  useEffect(() => {
+    const flush = () => {
+      if (!layoutPersistReadyRef.current || !isDirty) return;
+      if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+      void saveDashboard({ silent: true });
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [saveDashboard, isDirty]);
 
   const showWidgetConfigPanel =
     !embeddedPreview &&
@@ -2523,7 +2805,7 @@ export function AdminDashboardStudio({
           onEditFilter={setEditingFilterId}
           onRemoveFilter={(id) => {
             setGlobalFilters((prev) => prev.filter((f) => f.id !== id));
-            setIsDirty(true);
+            markDirty();
           }}
           onAddFilter={handleAddGlobalFilter}
           onAddImage={() => addImageWidgetToDashboard()}
@@ -2539,12 +2821,17 @@ export function AdminDashboardStudio({
           fiscalYearStartMonth={fiscalYearStartMonth}
           onFiscalYearStartMonthChange={(month) => {
             setFiscalYearStartMonth(month);
-            setIsDirty(true);
+            markDirty();
+          }}
+          coverImageUrl={coverImageUrl}
+          onCoverImageUrlChange={(url) => {
+            setCoverImageUrl(url);
+            markDirty();
           }}
           dashboardCompareDefaults={dashboardCompareDefaults}
           onDashboardCompareDefaultsChange={(next) => {
             setDashboardCompareDefaults(next);
-            setIsDirty(true);
+            markDirty();
           }}
           globalFilters={globalFilters}
           studioFilterValues={studioFilterValues}
@@ -2650,10 +2937,17 @@ export function AdminDashboardStudio({
                               ...filterDateFieldCtx,
                               inputType: nextType,
                             });
-                            let operator = prev.operator ?? (nextIsDate ? "YEAR" : "=");
-                            if (nextType === "multi" && !nextIsDate) operator = "IN";
-                            else if (nextIsDate && !isDashboardDateFilterOperator(operator)) operator = "YEAR";
-                            return { ...prev, inputType: nextType, operator };
+                            const operator = reconcileFilterOperatorWithInputType({
+                              operator:
+                                prev.operator ?? (nextIsDate ? "YEAR" : "="),
+                              inputType: nextType,
+                              isDateField: nextIsDate,
+                            });
+                            const nextOperator =
+                              nextIsDate && !isDashboardDateFilterOperator(operator)
+                                ? "YEAR"
+                                : operator;
+                            return { ...prev, inputType: nextType, operator: nextOperator };
                           });
                         }}
                       />
@@ -2680,15 +2974,20 @@ export function AdminDashboardStudio({
                             setEditFilterForm((prev) => (prev ? { ...prev, operator: op } : null))
                           }
                         />
+                      ) : editFilterForm.inputType === "multi" ? (
+                        <p className="rounded-lg border border-[var(--studio-border)] bg-[var(--studio-bg)] px-3 py-2 text-sm text-[var(--studio-fg-muted)]">
+                          Selección múltiple: el valor debe estar en la lista (operador IN).
+                        </p>
                       ) : (
                         <Select
-                          value={compareOp}
+                          value={compareOp === "IN" ? "=" : compareOp}
                           disablePortal
                           buttonClassName={studioSelectButtonClass}
                           options={[
                             { value: "=", label: "Igual" },
                             { value: "!=", label: "Distinto" },
                             { value: "CONTAINS", label: "Contiene" },
+                            { value: "NOT_CONTAINS", label: "No contiene" },
                             { value: "STARTS_WITH", label: "Comienza por" },
                             { value: "ENDS_WITH", label: "Termina en" },
                             { value: ">", label: "Mayor que" },
@@ -2855,20 +3154,36 @@ export function AdminDashboardStudio({
               <Button
                 onClick={() => {
                   if (!editFilterForm) return;
+                  const isDateMode = isDashboardFilterDateField(editFilterForm.field, {
+                    ...filterDateFieldCtx,
+                    inputType: editFilterForm.inputType,
+                  });
+                  const reconciled = reconcileFilterOperatorWithInputType({
+                    operator: editFilterForm.operator,
+                    inputType: editFilterForm.inputType,
+                    isDateField: isDateMode,
+                  });
                   const operator = resolveDashboardFilterOperator({
                     field: editFilterForm.field,
-                    operator: editFilterForm.operator,
+                    operator: reconciled,
                     inputType: editFilterForm.inputType,
                     etlDateFields: filterDateFieldCtx.etlDateFields,
                     dataSourceDateFields: filterDateFieldCtx.dataSourceDateFields,
                   });
                   setGlobalFilters((prev) =>
                     prev.map((f) =>
-                      f.id === editingFilterId ? { ...editFilterForm, id: f.id, operator } : f
+                      f.id === editingFilterId
+                        ? {
+                            ...editFilterForm,
+                            id: f.id,
+                            inputType: editFilterForm.inputType ?? "select",
+                            operator,
+                          }
+                        : f
                     )
                   );
                   setEditingFilterId(null);
-                  setIsDirty(true);
+                  markDirty();
                   if (filterReloadTimerRef.current) clearTimeout(filterReloadTimerRef.current);
                   filterReloadTimerRef.current = setTimeout(() => {
                     reloadWidgetsOnActivePage();
@@ -2980,7 +3295,7 @@ export function AdminDashboardStudio({
                 cardLayoutMode === "manual" && draggingWidgetId && "studio-blocks--dragging"
               )}
             >
-              {packedPlacements.map(({ widget: w, gridColumn, gridRow }) => {
+              {packedPlacements.map(({ widget: w, gridColumn, gridRow, rowSpan }) => {
                 const blockState: MetricBlockState = "estable";
                 const insight =
                   w.rows && Array.isArray(w.rows)
@@ -3013,22 +3328,46 @@ export function AdminDashboardStudio({
                 }
                 const span = clampGridSpan(w.gridSpan, 2);
                 const isSelected = selectedId === w.id;
-                const minH = w.minHeight ?? 280;
+                // Altura visual = minHeight persistido (snapeado a la rejilla).
+                const minH =
+                  typeof w.minHeight === "number" && w.minHeight > 0
+                    ? w.minHeight
+                    : heightPxForRowSpan(rowSpan, undefined, packRowGapPx);
                 const effectiveTheme = mergeCardTheme(themeResolved, w.cardTheme);
                 const orderIdx = packedPlacements.findIndex((x) => x.widget.id === w.id);
                 const canMoveUpReorder = cardLayoutMode === "auto" && orderIdx > 0;
                 const canMoveDownReorder =
                   cardLayoutMode === "auto" && orderIdx >= 0 && orderIdx < packedPlacements.length - 1;
                 const onDragHandleStart =
-                  cardLayoutMode === "manual" && !embeddedPreview && mode === "disenar" && w.fixedGrid
+                  cardLayoutMode === "manual" && !embeddedPreview && mode === "disenar"
                     ? (e: React.PointerEvent) => {
                         e.stopPropagation();
                         e.preventDefault();
+                        const placement = packedPlacements.find((x) => x.widget.id === w.id);
+                        const startFixedGrid = w.fixedGrid
+                          ? clampDashboardFixedGrid(w.fixedGrid, packCols)
+                          : placement
+                            ? packedPlacementToFixedGrid(placement)
+                            : {
+                                col: 1,
+                                row: 1,
+                                colSpan: clampGridSpan(w.gridSpan, 2),
+                                rowSpan: minRowSpanForMinHeight(
+                                  typeof w.minHeight === "number" && w.minHeight > 0 ? w.minHeight : 280,
+                                  undefined,
+                                  packRowGapPx
+                                ),
+                              };
+                        if (!w.fixedGrid) {
+                          setWidgets((prev) =>
+                            prev.map((x) => (x.id === w.id ? { ...x, fixedGrid: startFixedGrid } : x))
+                          );
+                        }
                         dragStateRef.current = {
                           widgetId: w.id,
                           startX: e.clientX,
                           startY: e.clientY,
-                          startFixedGrid: clampDashboardFixedGrid(w.fixedGrid!, packCols),
+                          startFixedGrid,
                         };
                         setDraggingWidgetId(w.id);
                         (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
@@ -3056,7 +3395,10 @@ export function AdminDashboardStudio({
                     style={{
                       gridColumn,
                       gridRow,
+                      height: minH,
                       minHeight: minH,
+                      maxHeight: minH,
+                      alignSelf: "start",
                       zIndex: typeof w.zIndex === "number" ? w.zIndex : 0,
                       ...studioBlockCellChromeStyle(effectiveTheme),
                     }}

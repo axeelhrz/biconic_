@@ -4,6 +4,7 @@ import { getServerAuthUser } from "@/lib/supabase/server-backend";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
 import type { Dashboard } from "@/components/dashboard/DashboardCard";
 import { toSqlParams } from "@/lib/db/sql-params";
+import { resolveDashboardCoverImageUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 function getSql() {
   return postgres(getInternalDbUrl(), { max: 5 });
@@ -138,6 +139,7 @@ export async function listViewerAccessibleDashboardsFromDb(): Promise<ViewerAcce
       description: string | null;
       user_id: string | null;
       client_id: string | null;
+      cover_image_url: string | null;
     };
 
     const publishedSelect = hasPublished ? `d.published` : `false AS published`;
@@ -145,10 +147,11 @@ export async function listViewerAccessibleDashboardsFromDb(): Promise<ViewerAcce
     const descriptionSelect = (await columnExists(sql, "dashboard", "description"))
       ? `d.description`
       : `NULL::text AS description`;
+    const coverSelect = `NULLIF(TRIM(d.layout->>'coverImageUrl'), '') AS cover_image_url`;
 
     const ownRows = (await sql.unsafe(
       `
-      SELECT d.id, d.title, d.name, ${publishedSelect}, ${visibilitySelect}, ${descriptionSelect}, d.user_id, d.client_id
+      SELECT d.id, d.title, d.name, ${publishedSelect}, ${visibilitySelect}, ${descriptionSelect}, d.user_id, d.client_id, ${coverSelect}
       FROM public.dashboard d
       WHERE d.user_id = $1
       `,
@@ -162,7 +165,7 @@ export async function listViewerAccessibleDashboardsFromDb(): Promise<ViewerAcce
         : ``;
       sharedRows = (await sql.unsafe(
         `
-        SELECT DISTINCT d.id, d.title, d.name, ${publishedSelect}, ${visibilitySelect}, ${descriptionSelect}, d.user_id, d.client_id
+        SELECT DISTINCT d.id, d.title, d.name, ${publishedSelect}, ${visibilitySelect}, ${descriptionSelect}, d.user_id, d.client_id, ${coverSelect}
         FROM public.dashboard d
         INNER JOIN public.dashboard_has_client_permissions p
           ON p.dashboard_id = d.id
@@ -182,7 +185,7 @@ export async function listViewerAccessibleDashboardsFromDb(): Promise<ViewerAcce
           : ``;
       clientPublishedRows = (await sql.unsafe(
         `
-        SELECT d.id, d.title, d.name, ${publishedSelect}, ${visibilitySelect}, ${descriptionSelect}, d.user_id, d.client_id
+        SELECT d.id, d.title, d.name, ${publishedSelect}, ${visibilitySelect}, ${descriptionSelect}, d.user_id, d.client_id, ${coverSelect}
         FROM public.dashboard d
         WHERE d.client_id = ANY($1::uuid[])
         ${publishedClause}
@@ -222,7 +225,7 @@ export async function listViewerAccessibleDashboardsFromDb(): Promise<ViewerAcce
       .map((row) => ({
         id: String(row.id),
         title: row.title?.trim() || row.name?.trim() || "Sin título",
-        imageUrl: "/Image.svg",
+        imageUrl: resolveDashboardCoverImageUrl({ coverImageUrl: row.cover_image_url }),
         status: dashboardPublishedStatusFromRow({
           published: row.published,
           visibility: row.visibility,

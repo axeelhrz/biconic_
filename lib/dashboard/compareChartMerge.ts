@@ -1,9 +1,10 @@
 import type { ChartConfig, BuildChartConfigWidget } from "@/lib/dashboard/buildChartConfig";
-import { normalizeAggregationCompare } from "@/lib/dashboard/compareSpec";
+import { normalizeAggregationCompare, type CompareSpec } from "@/lib/dashboard/compareSpec";
 import { pickDateGroupBySourceField } from "@/lib/dashboard/dateGroupBySourceField";
 import { getCompareColumnKeys } from "@/lib/dashboard/compareDisplayKeys";
 import { getEffectiveDashboardCompareUi, effectivePlacementEnabled } from "@/lib/dashboard/ensureDashboardCompareUi";
 import { effectiveWidgetChartType } from "@/lib/dashboard/effectiveWidgetChartType";
+import { resolveChartMetricYAxisId } from "@/lib/dashboard/chartMetricAxis";
 
 function compareSpecFromAgg(agg: BuildChartConfigWidget["aggregationConfig"] | undefined) {
   return normalizeAggregationCompare({
@@ -23,8 +24,32 @@ function compareSpecFromAgg(agg: BuildChartConfigWidget["aggregationConfig"] | u
   });
 }
 
+function defaultCompareSeriesLabel(spec: CompareSpec, uiLabel: string | undefined, metricLabel: string): string {
+  const custom = (uiLabel ?? "").trim();
+  if (custom) return custom.slice(0, 120);
+  const base =
+    spec.kind === "fixed"
+      ? "Objetivo"
+      : spec.kind === "temporal"
+        ? "Periodo anterior"
+        : spec.kind === "average"
+          ? "Promedio"
+          : spec.kind === "column"
+            ? "Referencia"
+            : spec.kind === "total_share"
+              ? "Total"
+              : spec.kind === "cumulative"
+                ? "Acumulado"
+                : spec.kind === "comparative"
+                  ? "Comparativo"
+                  : "Referencia";
+  return metricLabel && metricLabel !== base ? `${base} (${metricLabel})` : base;
+}
+
+const COMPARE_SERIES_CHART_TYPES = new Set(["line", "area", "bar", "horizontalBar", "stackedColumn", "combo"]);
+
 /**
- * Añade una serie de línea (referencia / periodo anterior) cuando el widget lo solicita.
+ * Añade series de comparación (periodo anterior, objetivo, etc.) como datasets de línea.
  * Debe usarse con las mismas filas `rows` ya ordenadas que las usadas para construir `datasets`.
  */
 export function appendCompareLineDatasetsIfConfigured(
@@ -44,24 +69,40 @@ export function appendCompareLineDatasetsIfConfigured(
   }
   const spec = compareSpecFromAgg(agg);
   if (spec.kind === "none") return datasets;
-  if (resolvedType !== "line" && resolvedType !== "area") return datasets;
-  const y0 = yKeys[0];
-  if (!y0 || !rows.length) return datasets;
+  if (!COMPARE_SERIES_CHART_TYPES.has(resolvedType)) return datasets;
+  if (!yKeys.length || !rows.length) return datasets;
+
   const sample = rows[0] as Record<string, unknown>;
-  const keys = getCompareColumnKeys(spec, y0, sample);
-  const refKey = keys.referenceSeriesKey;
-  if (!refKey || !rows.some((r) => Object.prototype.hasOwnProperty.call(r as object, refKey))) return datasets;
-  const label = (ui?.label?.trim() || "Referencia").slice(0, 120);
-  const data = rows.map((r) => Number((r as Record<string, unknown>)[refKey] ?? NaN));
-  return [
-    ...datasets,
-    {
+  const added = new Set<string>();
+  const out = [...datasets];
+
+  for (let i = 0; i < yKeys.length; i++) {
+    const y0 = yKeys[i]!;
+    const keys = getCompareColumnKeys(spec, y0, sample);
+    const refKey = keys.referenceSeriesKey;
+    if (!refKey || added.has(refKey)) continue;
+    if (!rows.some((r) => Object.prototype.hasOwnProperty.call(r as object, refKey))) continue;
+    added.add(refKey);
+
+    const metricLabel = String(
+      (agg?.chartDatasetLabelOverrides as Record<string, string> | undefined)?.[y0] ?? y0
+    ).trim();
+    const label = defaultCompareSeriesLabel(spec, ui?.label, yKeys.length > 1 ? metricLabel : "");
+    const data = rows.map((r) => Number((r as Record<string, unknown>)[refKey] ?? NaN));
+    const yAxisID = resolveChartMetricYAxisId(y0, i, agg, resolvedType, yKeys.length);
+
+    out.push({
       label,
       data,
       borderColor: "#94a3b8",
-      borderWidth: lineStrokeW,
+      backgroundColor: "transparent",
+      borderWidth: Math.max(1, lineStrokeW),
+      borderDash: [6, 4],
       fill: false,
       type: "line" as const,
-    } as (typeof datasets)[number],
-  ];
+      ...(yAxisID ? { yAxisID } : {}),
+    });
+  }
+
+  return out;
 }

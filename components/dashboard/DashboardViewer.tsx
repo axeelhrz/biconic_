@@ -58,8 +58,12 @@ import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   type DashboardFixedGrid,
+  clampDashboardFixedGrid,
+  clampGridSpan,
   computeDashboardGridPlacementsPacked,
+  DASHBOARD_GRID_COLUMN_COUNT,
   DASHBOARD_GRID_ROW_UNIT_PX,
+  heightPxForRowSpan,
 } from "@/lib/dashboard/gridLayout";
 import { useDashboardPackLayout } from "@/hooks/useDashboardPackColumnCount";
 import { MobileDashboardView } from "@/components/dashboard/mobile/MobileDashboardView";
@@ -67,6 +71,15 @@ import {
   DATE_OPERATORS_WITH_MULTI_VALUE_SQL,
   expandMonthFilterValueWithYear,
 } from "@/lib/dashboard/expandMonthFilterWithYear";
+import {
+  isMultiSelectFilterInput,
+  normalizeLoadedGlobalFilter,
+  reconcileFilterOperatorWithInputType,
+  resolveFilterInputType,
+  shouldApplyFilterAsIn,
+  wantsSelectableFilterControl,
+} from "@/lib/dashboard/filterInputType";
+import { isDashboardFilterDateField } from "@/lib/dashboard/isDashboardFilterDateField";
 import {
   collectDashboardFilterIds,
   loadPersistedDashboardViewerFilters,
@@ -463,7 +476,7 @@ function GlobalFilterMultiSelect({
       >
         {filtered.length === 0 ? (
           <p className="px-1 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-            Sin coincidencias
+            {options.length === 0 ? "Sin opciones" : "Sin coincidencias"}
           </p>
         ) : (
           filtered.map((v) => {
@@ -607,7 +620,7 @@ function GlobalFilterSingleSelect({
         </button>
         {filtered.length === 0 ? (
           <p className="px-2.5 py-2 text-xs" style={{ color: "var(--platform-fg-muted)" }}>
-            Sin coincidencias
+            {options.length === 0 ? "Sin opciones" : "Sin coincidencias"}
           </p>
         ) : (
           filtered.map((v) => {
@@ -1016,6 +1029,7 @@ export function DashboardViewer({
   const [filterDraft, setFilterDraft] = useState<Record<string, unknown>>({});
   const [filterApplied, setFilterApplied] = useState<Record<string, unknown>>({});
   const [globalFilterDistinctValues, setGlobalFilterDistinctValues] = useState<Record<string, unknown[]>>({});
+  const [globalFilterDistinctLoading, setGlobalFilterDistinctLoading] = useState(false);
   /** Por widget → id de dimensionDefaultFilter → valor elegido en UI */
   const [dimensionDefaultFilterValues, setDimensionDefaultFilterValues] = useState<
     Record<string, Record<string, unknown>>
@@ -1133,7 +1147,25 @@ export function DashboardViewer({
       );
       if (initialTitle) setTitle(initialTitle);
       if (initialGlobalFilters) {
-        setGlobalFilters(initialGlobalFilters);
+        const etlSnapshot = etlDataRef.current as {
+          fields?: { date?: string[] };
+          dataSources?: { fields?: { date?: string[] } }[];
+        } | null;
+        const previewDateFields =
+          etlSnapshot?.dataSources?.[0]?.fields?.date ?? etlSnapshot?.fields?.date ?? [];
+        const previewDsDateFields = (etlSnapshot?.dataSources ?? []).map((ds) => ds.fields?.date ?? []);
+        setGlobalFilters(
+          initialGlobalFilters.map((f) => {
+            const inputType = resolveFilterInputType(f);
+            const isDate =
+              isDashboardFilterDateField(f.field, {
+                inputType,
+                etlDateFields: previewDateFields,
+                dataSourceDateFields: previewDsDateFields,
+              }) || String(inputType).toLowerCase() === "date";
+            return normalizeLoadedGlobalFilter(f, isDate) as AggregationFilter;
+          })
+        );
         const applied = applyPersistedViewerFilterState({
           gfs: initialGlobalFilters,
           widgets: initialWidgets,
@@ -1226,10 +1258,30 @@ export function DashboardViewer({
         gridOrder: base.gridOrder ?? i,
         pageId: normalizeWidgetPageId(base.pageId),
       });
+      const gridSpan = clampGridSpan(normalized.gridSpan, 2);
+      let minHeight =
+        typeof normalized.minHeight === "number" && Number.isFinite(normalized.minHeight) && normalized.minHeight > 0
+          ? Math.round(normalized.minHeight)
+          : undefined;
       // En auto, fixedGrid stale anula gridSpan/minHeight al reabrir.
+      // Si faltan tamaños explícitos, promocionar desde fixedGrid antes de quitarlo.
       if (loadedCardLayoutMode === "auto" && normalized.fixedGrid) {
+        const fg = clampDashboardFixedGrid(normalized.fixedGrid, DASHBOARD_GRID_COLUMN_COUNT);
         const { fixedGrid: _fg, ...without } = normalized;
-        normalized = without as typeof normalized;
+        if (minHeight == null && fg.rowSpan > 0) {
+          minHeight = heightPxForRowSpan(fg.rowSpan);
+        }
+        normalized = {
+          ...without,
+          gridSpan: normalized.gridSpan != null ? gridSpan : fg.colSpan,
+          ...(minHeight != null ? { minHeight } : {}),
+        } as typeof normalized;
+      } else {
+        normalized = {
+          ...normalized,
+          gridSpan,
+          ...(minHeight != null ? { minHeight } : {}),
+        } as typeof normalized;
       }
       const needsData =
         normalized.type !== "filter" &&
@@ -1257,7 +1309,25 @@ export function DashboardViewer({
     setDimensionDefaultDistinctValues({});
     setTitle((dashboard.title as string) || "Dashboard");
     setDashboardTheme((prev) => ({ ...DEFAULT_DASHBOARD_THEME, ...prev, ...loadedTheme }));
-    setGlobalFilters(gfs);
+    const etlSnapshot = etlDataRef.current as {
+      fields?: { date?: string[] };
+      dataSources?: { fields?: { date?: string[] } }[];
+    } | null;
+    const layoutDateFields =
+      etlSnapshot?.dataSources?.[0]?.fields?.date ?? etlSnapshot?.fields?.date ?? [];
+    const layoutDsDateFields = (etlSnapshot?.dataSources ?? []).map((ds) => ds.fields?.date ?? []);
+    setGlobalFilters(
+      gfs.map((f) => {
+        const inputType = resolveFilterInputType(f);
+        const isDate =
+          isDashboardFilterDateField(f.field, {
+            inputType,
+            etlDateFields: layoutDateFields,
+            dataSourceDateFields: layoutDsDateFields,
+          }) || String(inputType).toLowerCase() === "date";
+        return normalizeLoadedGlobalFilter(f, isDate) as AggregationFilter;
+      })
+    );
     if (filterCommitMode === "onButton") {
       setFilterDraft(persistedState.filterDraft);
       setFilterApplied(persistedState.filterApplied);
@@ -1291,30 +1361,35 @@ export function DashboardViewer({
     const distinctUrl = apiEndpoints?.distinctValues ?? "/api/dashboard/distinct-values";
     const primaryDateFields = dataSources?.[0]?.fields?.date ?? (etlData as { fields?: { date?: string[] } })?.fields?.date ?? [];
     let cancelled = false;
+    setGlobalFilterDistinctLoading(true);
     (async () => {
-      const values = await fetchGlobalFilterDistinctValues({
-        globalFilters: globalFilters as { id: string; field: string; operator?: string; inputType?: string; filterType?: string }[],
-        dataSources: (dataSources ?? []).filter(
-          (ds): ds is { id: string; schema?: string; tableName: string; fields?: { date?: string[] } } =>
-            !!ds.tableName
-        ),
-        primarySourceId,
-        primaryTableName,
-        primaryDateFields,
-        datasetDimensions,
-        derivedColumns:
-          derivedColumnsFromEtl.length > 0
-            ? derivedColumnsFromEtl.map((d) => ({
-                name: d.name,
-                expression: d.expression,
-                defaultAggregation: d.defaultAggregation ?? "SUM",
-              }))
-            : undefined,
-        distinctUrl,
-        safeJsonResponse,
-      });
-      if (!cancelled) {
-        setGlobalFilterDistinctValues((prev) => ({ ...prev, ...values }));
+      try {
+        const values = await fetchGlobalFilterDistinctValues({
+          globalFilters: globalFilters as { id: string; field: string; operator?: string; inputType?: string; filterType?: string }[],
+          dataSources: (dataSources ?? []).filter(
+            (ds): ds is { id: string; schema?: string; tableName: string; fields?: { date?: string[] } } =>
+              !!ds.tableName
+          ),
+          primarySourceId,
+          primaryTableName,
+          primaryDateFields,
+          datasetDimensions,
+          derivedColumns:
+            derivedColumnsFromEtl.length > 0
+              ? derivedColumnsFromEtl.map((d) => ({
+                  name: d.name,
+                  expression: d.expression,
+                  defaultAggregation: d.defaultAggregation ?? "SUM",
+                }))
+              : undefined,
+          distinctUrl,
+          safeJsonResponse,
+        });
+        if (!cancelled) {
+          setGlobalFilterDistinctValues((prev) => ({ ...prev, ...values }));
+        }
+      } finally {
+        if (!cancelled) setGlobalFilterDistinctLoading(false);
       }
     })();
     return () => {
@@ -1591,13 +1666,22 @@ export function DashboardViewer({
             });
             if (physicalField == null) continue;
             const useIn =
-              rawOp === "IN" ||
-              (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
-                inputT === "multi" &&
-                Array.isArray(v) &&
-                v.length > 0);
+              !DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper) &&
+              shouldApplyFilterAsIn({
+                operator: rawOp,
+                inputType: inputT,
+                value: v,
+                isDateMultiValueOperator: DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpUpper),
+              });
             const op = useIn ? "IN" : rawOp;
-            const value: unknown = op === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+            const value: unknown =
+              op === "IN"
+                ? Array.isArray(v)
+                  ? v
+                  : [v]
+                : Array.isArray(v) && inputT !== "multi"
+                  ? v[0]
+                  : v;
             mappedGlobalFilters.push({ ...f, field: physicalField, operator: op, value });
           }
         }
@@ -1659,13 +1743,22 @@ export function DashboardViewer({
           });
           if (physicalFw == null) continue;
           const useInFw =
-            rawOpFw === "IN" ||
-            (!DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper) &&
-              fc.inputType === "multi" &&
-              Array.isArray(v) &&
-              v.length > 0);
+            !DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper) &&
+            shouldApplyFilterAsIn({
+              operator: rawOpFw,
+              inputType: fc.inputType,
+              value: v,
+              isDateMultiValueOperator: DATE_OPERATORS_WITH_MULTI_VALUE_SQL.has(rawOpFwUpper),
+            });
           const opFw = useInFw ? "IN" : rawOpFw;
-          const valueFw: unknown = opFw === "IN" ? (Array.isArray(v) ? v : [v]) : v;
+          const valueFw: unknown =
+            opFw === "IN"
+              ? Array.isArray(v)
+                ? v
+                : [v]
+              : Array.isArray(v) && fc.inputType !== "multi"
+                ? v[0]
+                : v;
           mappedGlobalFilters.push({
             id: fw.id,
             field: physicalFw,
@@ -2430,10 +2523,18 @@ export function DashboardViewer({
                 : isYearOperator((gf as AggregationFilter).operator) && Array.isArray(rawDistinct)
                   ? normalizeDistinctYearOptions(rawDistinct)
                   : rawDistinct;
-            const inputType = (gf as AggregationFilter & { inputType?: string }).inputType;
+            const inputType = resolveFilterInputType(gf as AggregationFilter & { inputType?: string });
             const isYearOp = isYearOperator((gf as AggregationFilter).operator);
             const isYearMonthOp = isYearMonthOperator((gf as AggregationFilter).operator);
-            const isMulti = (gf.operator || "=") === "IN" || inputType === "multi";
+            const isMulti = isMultiSelectFilterInput({
+              inputType,
+              operator: gf.operator,
+            });
+            const wantsSelectable =
+              wantsSelectableFilterControl({ inputType, operator: gf.operator }) ||
+              isYearOp ||
+              isYearMonthOp ||
+              (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf);
             const selectedArrayRaw = isMulti
               ? ((Array.isArray(uiFilterValues[gf.id])
                   ? uiFilterValues[gf.id]
@@ -2446,7 +2547,8 @@ export function DashboardViewer({
                   String(normalizeMonthFilterStoredValue((gf as AggregationFilter).operator, x))
                 )
               : selectedArrayRaw;
-            const hasOptions = Array.isArray(options) && options.length > 0;
+            const optionList = Array.isArray(options) ? (options as unknown[]) : [];
+            const hasOptions = optionList.length > 0;
             const fieldClass =
               layout === "inline"
                 ? "mobile-dash-filter-block flex w-full min-w-0 flex-col gap-2 text-sm"
@@ -2460,52 +2562,60 @@ export function DashboardViewer({
                 >
                   {label}
                 </span>
-                {isMulti && hasOptions ? (
-                  <GlobalFilterMultiSelect
-                    label={String(label)}
-                    operator={(gf as AggregationFilter).operator}
-                    options={options as unknown[]}
-                    selectedArray={selectedArray}
-                    layout={layout}
-                    onChangeSelected={(next) =>
-                      setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
-                    }
-                  />
-                ) : ((gf as { inputType?: string }).inputType === "select" ||
-                    isYearOp ||
-                    isYearMonthOp ||
-                    (isDayOperator((gf as AggregationFilter).operator) && isDateFieldGf)) &&
-                  hasOptions ? (
-                  <GlobalFilterSingleSelect
-                    label={String(label)}
-                    operator={(gf as AggregationFilter).operator}
-                    options={options as unknown[]}
-                    layout={layout}
-                    value={
-                      isYearOp
-                        ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
-                        : isYearMonthOp
-                          ? String(uiFilterValues[gf.id] ?? "")
-                          : isDayOperator((gf as AggregationFilter).operator)
-                            ? dayFilterSelectDisplayValue(
-                                (gf as AggregationFilter).operator,
-                                uiFilterValues[gf.id]
-                              )
-                            : monthFilterSelectDisplayValue(
-                                (gf as AggregationFilter).operator,
-                                uiFilterValues[gf.id]
-                              )
-                    }
-                    onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
-                  />
+                {isMulti && wantsSelectable ? (
+                  <>
+                    <GlobalFilterMultiSelect
+                      label={String(label)}
+                      operator={(gf as AggregationFilter).operator}
+                      options={optionList}
+                      selectedArray={selectedArray}
+                      layout={layout}
+                      onChangeSelected={(next) =>
+                        setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))
+                      }
+                    />
+                    {!hasOptions && (
+                      <p className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>
+                        {globalFilterDistinctLoading ? "Cargando opciones…" : "Sin opciones disponibles"}
+                      </p>
+                    )}
+                  </>
+                ) : wantsSelectable ? (
+                  <>
+                    <GlobalFilterSingleSelect
+                      label={String(label)}
+                      operator={(gf as AggregationFilter).operator}
+                      options={optionList}
+                      layout={layout}
+                      value={
+                        isYearOp
+                          ? yearFilterSelectDisplayValue(uiFilterValues[gf.id])
+                          : isYearMonthOp
+                            ? String(uiFilterValues[gf.id] ?? "")
+                            : isDayOperator((gf as AggregationFilter).operator)
+                              ? dayFilterSelectDisplayValue(
+                                  (gf as AggregationFilter).operator,
+                                  uiFilterValues[gf.id]
+                                )
+                              : isMonthOperator((gf as AggregationFilter).operator)
+                                ? monthFilterSelectDisplayValue(
+                                    (gf as AggregationFilter).operator,
+                                    uiFilterValues[gf.id]
+                                  )
+                                : String(uiFilterValues[gf.id] ?? "")
+                      }
+                      onChange={(next) => setUiFilterValues((prev) => ({ ...prev, [gf.id]: next }))}
+                    />
+                    {!hasOptions && (
+                      <p className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>
+                        {globalFilterDistinctLoading ? "Cargando opciones…" : "Sin opciones disponibles"}
+                      </p>
+                    )}
+                  </>
                 ) : (
                   <input
                     type={
-                      (gf as { inputType?: string }).inputType === "number"
-                        ? "number"
-                        : (gf as { inputType?: string }).inputType === "date"
-                          ? "date"
-                          : "text"
+                      inputType === "number" ? "number" : inputType === "date" ? "date" : "text"
                     }
                     className={
                       layout === "inline"
@@ -2521,23 +2631,11 @@ export function DashboardViewer({
                     onChange={(e) =>
                       setUiFilterValues((prev) => ({
                         ...prev,
-                        [gf.id]:
-                          (gf as { inputType?: string }).inputType === "number"
-                            ? e.target.valueAsNumber
-                            : e.target.value,
+                        [gf.id]: inputType === "number" ? e.target.valueAsNumber : e.target.value,
                       }))
                     }
-                    placeholder={hasOptions ? undefined : "Escribí un valor…"}
+                    placeholder={inputType === "search" ? "Buscar…" : "Escribí un valor…"}
                   />
-                )}
-                {layout === "inline" && !hasOptions && !isMulti && (
-                  <p className="text-[11px]" style={{ color: "var(--platform-fg-muted)" }}>
-                    {(gf as { inputType?: string }).inputType === "select" ||
-                    isYearOp ||
-                    isYearMonthOp
-                      ? "Cargando opciones…"
-                      : null}
-                  </p>
                 )}
               </div>
             );
@@ -2549,6 +2647,7 @@ export function DashboardViewer({
       globalFilters,
       globalFilterDateMeta,
       globalFilterDistinctValues,
+      globalFilterDistinctLoading,
       uiFilterValues,
       setUiFilterValues,
     ]
@@ -2798,13 +2897,18 @@ export function DashboardViewer({
             className={`grid${useClientTheme ? " client-view-grid" : ""}`}
             style={{
               gridTemplateColumns: `repeat(${packCols}, minmax(0, 1fr))`,
-              gridAutoRows: `minmax(${DASHBOARD_GRID_ROW_UNIT_PX}px, auto)`,
+              gridAutoRows: `${DASHBOARD_GRID_ROW_UNIT_PX}px`,
               rowGap: useClientTheme ? "0.5rem" : "0.75rem",
               columnGap: useClientTheme ? "0.75rem" : "1rem",
+              alignItems: "stretch",
             }}
           >
-            {placements.map(({ widget, gridColumn, gridRow }) => {
+            {placements.map(({ widget, gridColumn, gridRow, rowSpan }) => {
               const isExportableWidget = exportableWidgetIds.has(widget.id);
+              const cellMinH =
+                typeof widget.minHeight === "number" && widget.minHeight > 0
+                  ? widget.minHeight
+                  : heightPxForRowSpan(rowSpan, undefined, packRowGapPx);
               return (
                 <div
                   key={widget.id}
@@ -2814,8 +2918,12 @@ export function DashboardViewer({
                     gridRow,
                     display: "flex",
                     flexDirection: "column",
-                    minHeight: 0,
+                    height: cellMinH,
+                    minHeight: cellMinH,
+                    maxHeight: cellMinH,
+                    alignSelf: "start",
                     minWidth: 0,
+                    overflow: "hidden",
                     position: "relative",
                     zIndex: typeof (widget as Widget).zIndex === "number" ? (widget as Widget).zIndex : 0,
                   }}

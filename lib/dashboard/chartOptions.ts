@@ -101,6 +101,11 @@ function applyScale(
  * Formatea un valor combinando tipo (number/currency/percent) y escala (none/K/M/Bi).
  * Orden: primero escala (división + sufijo), luego tipo (prefijo $ o sufijo %).
  * decimals y useGrouping aplican al número antes del sufijo (K/M/Bi).
+ *
+ * Formato percent: el valor se interpreta como **ratio** (0.15 = 15%).
+ * Se multiplica por 100 y se agrega el símbolo %.
+ * Para deltas ya expresados en puntos porcentuales (p. ej. 12.5), pasar `value/100`
+ * o formatear con `none` y concatenar `%`.
  */
 /** Locale para números: punto como separador de miles, coma para decimales (ej. 1.234.567,89). */
 const NUMBER_LOCALE = "es-ES";
@@ -114,6 +119,19 @@ export function formatValue(
   useGrouping: boolean = true
 ): string {
   const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+
+  if (format === "percent") {
+    const pct = n * 100;
+    const { val, suffix } = applyScale(pct, scale);
+    const formatted = val.toLocaleString(NUMBER_LOCALE, {
+      maximumFractionDigits: decimals,
+      minimumFractionDigits: 0,
+      useGrouping,
+    });
+    return `${formatted}${suffix}%`;
+  }
+
   const { val, suffix } = applyScale(n, scale);
   const formatted = val.toLocaleString(NUMBER_LOCALE, {
     maximumFractionDigits: decimals,
@@ -121,7 +139,6 @@ export function formatValue(
     useGrouping,
   });
   const withSuffix = `${formatted}${suffix}`;
-  if (format === "percent") return `${withSuffix}%`;
   if (format === "currency") return `${currencySymbol}${withSuffix}`;
   return withSuffix;
 }

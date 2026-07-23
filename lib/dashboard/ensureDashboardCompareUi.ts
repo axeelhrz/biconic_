@@ -29,7 +29,9 @@ export function defaultComparePlacementsForWidgetType(widgetType?: string, chart
   const t = effectiveChartType(widgetType, chartType);
   if (t === "kpi") return ["kpi_below"];
   if (t === "table") return ["table_extra_columns"];
-  if (t === "line" || t === "area") return ["line_reference_series", "tooltip"];
+  if (t === "line" || t === "area" || t === "bar" || t === "horizontalBar" || t === "stackedColumn" || t === "combo") {
+    return ["line_reference_series", "tooltip"];
+  }
   return ["tooltip", "detail_card"];
 }
 

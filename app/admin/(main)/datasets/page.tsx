@@ -3,7 +3,7 @@
 import { Suspense, useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3, X } from "lucide-react";
+import { Plus, Search, Database, Loader2, ChevronRight, Pencil, BarChart3, X, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { searchEtls } from "@/app/admin/(main)/dashboard/actions";
@@ -38,6 +38,7 @@ export default function AdminDatasetsPage() {
   const [wizardDatasetName, setWizardDatasetName] = useState<string | null>(null);
   const [wizardDatasetConfig, setWizardDatasetConfig] = useState<Record<string, unknown> | null>(null);
   const [wizardLoading, setWizardLoading] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   /** Para autoabrir modal con ?etlId=: evitar reabrir en bucle; se resetea al cerrar el modal. */
   const autoOpenedEtlIdRef = useRef<string | null>(null);
 
@@ -139,6 +140,35 @@ export default function AdminDatasetsPage() {
     closeWizardModal();
     fetchDatasets();
   }, [closeWizardModal, fetchDatasets]);
+
+  const deleteDataset = useCallback(
+    async (ds: DatasetRow) => {
+      const label = ds.name?.trim() || ds.id;
+      const ok = window.confirm(
+        `¿Eliminar el dataset «${label}»?\n\nEsta acción no se puede deshacer. Los análisis y dashboards que lo usen pueden dejar de funcionar.`
+      );
+      if (!ok) return;
+      setDeletingId(ds.id);
+      try {
+        const res = await fetch(`/api/admin/datasets/${encodeURIComponent(ds.id)}`, { method: "DELETE" });
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json?.ok) {
+          toast.error(json?.error ?? "No se pudo eliminar el dataset");
+          return;
+        }
+        toast.success("Dataset eliminado");
+        if (wizardDatasetId === ds.id) {
+          closeWizardModal();
+        }
+        await fetchDatasets();
+      } catch {
+        toast.error("Error al eliminar el dataset");
+      } finally {
+        setDeletingId(null);
+      }
+    },
+    [closeWizardModal, fetchDatasets, wizardDatasetId]
+  );
 
   const formatDate = (iso: string) => {
     try {
@@ -490,7 +520,7 @@ export default function AdminDatasetsPage() {
                       className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors"
                       style={{ color: "var(--platform-accent)", background: "var(--platform-accent-dim)" }}
                       onClick={() => openEditDataset(ds)}
-                      disabled={wizardLoading}
+                      disabled={wizardLoading || deletingId === ds.id}
                     >
                       <Pencil className="h-3.5 w-3.5" />
                       Editar
@@ -503,6 +533,22 @@ export default function AdminDatasetsPage() {
                       <BarChart3 className="h-3.5 w-3.5" />
                       Ir a métricas
                     </Link>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-colors text-red-600 hover:bg-red-500/10 hover:text-red-700"
+                      onClick={() => deleteDataset(ds)}
+                      disabled={wizardLoading || deletingId === ds.id}
+                      title="Eliminar dataset"
+                    >
+                      {deletingId === ds.id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
+                      Eliminar
+                    </Button>
                   </div>
                 </li>
               ))}

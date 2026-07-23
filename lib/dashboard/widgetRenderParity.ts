@@ -35,6 +35,10 @@ export type AggregationLike = {
   chartLineBorderWidth?: number;
   /** Grosor de la cuadrícula del área de trazado (px). */
   chartGridLineWidth?: number;
+  chartBarBorderRadius?: number;
+  chartPointRadius?: number;
+  chartAxisXReverse?: boolean;
+  chartAxisYReverse?: boolean;
   chartAxisTickColor?: string;
   chartCategoryTickMaxRotation?: number;
   chartCategoryTickMinRotation?: number;
@@ -146,6 +150,12 @@ export function mergeChartVisualStyle(
   if (lineBw != null) out.lineBorderWidth = lineBw;
   const gridLw = n(agg.chartGridLineWidth);
   if (gridLw != null) out.gridLineWidth = gridLw;
+  const barR = n(agg.chartBarBorderRadius);
+  if (barR != null) out.barBorderRadius = barR;
+  const ptR = n(agg.chartPointRadius);
+  if (ptR != null) out.pointRadius = ptR;
+  if (agg.chartAxisXReverse === true) out.axisXReverse = true;
+  if (agg.chartAxisYReverse === true) out.axisYReverse = true;
   const fam = String(agg.chartFontFamily ?? "").trim();
   if (fam) out.chartFontFamily = fam;
   else if (themeFontFamily && String(themeFontFamily).trim() !== "") {
@@ -407,6 +417,8 @@ export const DASHBOARD_VISUAL_OVERRIDE_KEYS = new Set([
   "chartDatasetLabelOverrides",
   "chartMetricFormats",
   "chartComboSyncAxes",
+  "chartDualAxis",
+  "chartMetricAxis",
   "chartGridXDisplay",
   "chartGridYDisplay",
   "chartGridColor",
@@ -446,11 +458,18 @@ export const DASHBOARD_VISUAL_OVERRIDE_KEYS = new Set([
   "chartScaleMin",
   "chartScaleMax",
   "chartAxisStep",
+  "chartScalePerMetric",
+  "chartAxisXReverse",
+  "chartAxisYReverse",
+  "chartBarBorderRadius",
+  "chartPointRadius",
   "chartPinnedDimensions",
   "tableColumnLabelOverrides",
   "tableStyle",
   "chartDetailCard",
   "dashboardCompareUi",
+  "chartQuickCalc",
+  "chartPercentGroupField",
 ]);
 
 /** Claves de comparación editables desde el panel del dashboard (no del análisis ETL). */
@@ -812,6 +831,9 @@ export function mergeSavedAnalysisIntoWidget(
     "dimensionDefaultFilters",
     "orderBy",
     "limit",
+    "resultDisplayMode",
+    "resultAttributeDimension",
+    "resultAttributePick",
   ]);
   const firstMetricCfg: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(firstMetricCfgRaw)) {

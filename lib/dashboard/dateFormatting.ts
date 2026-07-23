@@ -1,3 +1,9 @@
+import {
+  fiscalQuarterIndex,
+  fiscalSemesterIndex,
+  fiscalYearFromParts,
+} from "@/lib/dashboard/fiscalYear";
+
 export type DateGranularity = "day" | "week" | "month" | "quarter" | "semester" | "year";
 
 /** Orden día/mes en cadenas ambiguas tipo `4/1/2024` (DMY = 4 ene, MDY = 1 abr). */
@@ -26,6 +32,56 @@ export const MONTH_NAMES_EN_SHORT = [
   "Nov",
   "Dec",
 ];
+
+/** Abreviaturas en español (p. ej. Sep-2024 / Abr-2026) para ejes y etiquetas. */
+export const MONTH_NAMES_ES_SHORT = [
+  "Ene",
+  "Feb",
+  "Mar",
+  "Abr",
+  "May",
+  "Jun",
+  "Jul",
+  "Ago",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dic",
+];
+
+const MONTH_NAMES_SHORT = MONTH_NAMES_ES_SHORT;
+
+function monthIndexFromAbbrev(token: string): number {
+  const t = token.toLowerCase();
+  const en = MONTH_NAMES_EN_SHORT.findIndex((name) => name.toLowerCase() === t);
+  if (en >= 0) return en;
+  return MONTH_NAMES_ES_SHORT.findIndex((name) => name.toLowerCase() === t);
+}
+
+function expandTwoDigitYear(yy: number): number {
+  return yy >= 70 ? 1900 + yy : 2000 + yy;
+}
+
+/**
+ * Parsea etiquetas Mes-Año en inglés o español:
+ * `Apr-2026`, `Abr-2026`, `Abr 2026`, `Abr-26` (mmm-yy).
+ */
+export function parseMonthYearLabel(raw: string): { year: number; month: number } | null {
+  const monYear = /^([A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3})[-\s](\d{2}|\d{4})$/u.exec(raw.trim());
+  if (!monYear) return null;
+  const monthIdx = monthIndexFromAbbrev(monYear[1]!);
+  if (monthIdx < 0) return null;
+  const yearRaw = Number(monYear[2]);
+  if (!Number.isFinite(yearRaw)) return null;
+  const year = monYear[2]!.length === 2 ? expandTwoDigitYear(yearRaw) : yearRaw;
+  if (year < 1000 || year > 9999) return null;
+  return { year, month: monthIdx + 1 };
+}
+
+/** @deprecated Preferir `parseMonthYearLabel` (soporta ES + EN). */
+export function parseMonthYearEnLabel(raw: string): { year: number; month: number } | null {
+  return parseMonthYearLabel(raw);
+}
 
 const EXCEL_EPOCH_MS = Date.UTC(1899, 11, 30);
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
@@ -133,15 +189,16 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
     return safeDateFromParts(year, month, 1);
   }
 
-  // Mon-YYYY (p. ej. Sep-2024 en datasets comparativos)
-  const monYear = raw.match(/^([A-Za-z]{3})-(\d{4})$/);
-  if (monYear) {
-    const monthIdx = MONTH_NAMES_EN_SHORT.findIndex(
-      (name) => name.toLowerCase() === monYear[1]!.toLowerCase()
-    );
-    if (monthIdx >= 0) {
-      return safeDateFromParts(Number(monYear[2]), monthIdx + 1, 1);
+  // Mon-YYYY / Mon-YY / Mon YYYY (EN o ES: Apr-2026, Abr-2026, Abr-26)
+  // Importante: si el patrón matchea pero el mes no es válido, NO caer a new Date()
+  // (V8 interpreta Abr/Ago/Dic-2026 como 1 de enero).
+  const monYearLike = /^[A-Za-zÁÉÍÓÚÜÑáéíóúüñ]{3}[-\s](?:\d{2}|\d{4})$/u.test(raw);
+  if (monYearLike) {
+    const parsedMonYear = parseMonthYearLabel(raw);
+    if (parsedMonYear) {
+      return safeDateFromParts(parsedMonYear.year, parsedMonYear.month, 1);
     }
+    return null;
   }
 
   // yyyy-MM (periodo mes; inequívoco frente a dd/MM vs MM/dd)
@@ -193,23 +250,59 @@ export function parseDateLike(value: unknown, options?: ParseDateLikeOptions): D
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
+export type FormatDateByGranularityOptions = ParseDateLikeOptions & {
+  /** Mes de inicio del año fiscal (1–12). Afecta year / quarter / semester. */
+  fiscalYearStartMonth?: number;
+};
+
 export function formatDateByGranularity(
   value: unknown,
   granularity: DateGranularity,
   fallback?: string,
-  parseOpts?: ParseDateLikeOptions
+  parseOpts?: FormatDateByGranularityOptions
 ): string | null {
+  // Etiquetas ya emitidas por el agregador fiscal (T1/2024, S2/2024, 2024).
+  if (typeof value === "string") {
+    const t = value.trim();
+    if (
+      (granularity === "quarter" || granularity === "semester" || granularity === "year") &&
+      (/^T[1-4]\/\d{4}$/i.test(t) || /^S[12]\/\d{4}$/i.test(t) || /^\d{4}$/.test(t))
+    ) {
+      return t;
+    }
+  }
+
   const dt = parseDateLike(value, parseOpts);
   if (!dt) return fallback ?? null;
 
   const year = dt.getUTCFullYear();
   const month = dt.getUTCMonth() + 1;
   const day = dt.getUTCDate();
+  const fyStart = parseOpts?.fiscalYearStartMonth;
 
-  if (granularity === "year") return String(year);
+  if (granularity === "year") {
+    if (fyStart != null && Number(fyStart) > 1) {
+      return String(fiscalYearFromParts(year, month, fyStart));
+    }
+    return String(year);
+  }
   if (granularity === "month") return `${year}-${pad2(month)}`;
-  if (granularity === "quarter") return `T${Math.floor((month - 1) / 3) + 1}/${year}`;
-  if (granularity === "semester") return `S${month <= 6 ? 1 : 2}/${year}`;
+  if (granularity === "quarter") {
+    if (fyStart != null && Number(fyStart) > 1) {
+      const fy = fiscalYearFromParts(year, month, fyStart);
+      const fq = fiscalQuarterIndex(month, fyStart);
+      return `T${fq}/${fy}`;
+    }
+    return `T${Math.floor((month - 1) / 3) + 1}/${year}`;
+  }
+  if (granularity === "semester") {
+    if (fyStart != null && Number(fyStart) > 1) {
+      const fy = fiscalYearFromParts(year, month, fyStart);
+      const fs = fiscalSemesterIndex(month, fyStart);
+      return `S${fs}/${fy}`;
+    }
+    return `S${month <= 6 ? 1 : 2}/${year}`;
+  }
   // day and week: show canonical calendar date
   return `${pad2(day)}/${pad2(month)}/${year}`;
 }
@@ -217,26 +310,12 @@ export function formatDateByGranularity(
 /** Mismo criterio que el preview del wizard de análisis (`formatPreviewDateValue`). */
 export type AnalysisDateDisplayFormat = "short" | "monthYear" | "year" | "datetime";
 
-const MONTH_NAMES_SHORT = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-
-export function parseMonthYearEnLabel(raw: string): { year: number; month: number } | null {
-  const monYear = /^([A-Za-z]{3})-(\d{4})$/.exec(raw.trim());
-  if (!monYear) return null;
-  const monthIdx = MONTH_NAMES_EN_SHORT.findIndex(
-    (name) => name.toLowerCase() === monYear[1]!.toLowerCase()
-  );
-  if (monthIdx < 0) return null;
-  const year = Number(monYear[2]);
-  if (!Number.isFinite(year) || year < 1000 || year > 9999) return null;
-  return { year, month: monthIdx + 1 };
-}
-
 export function formatMonthYearEnLabel(
   value: unknown,
   parseOpts?: ParseDateLikeOptions
 ): string | null {
   if (typeof value === "string") {
-    const parsed = parseMonthYearEnLabel(value);
+    const parsed = parseMonthYearLabel(value);
     if (parsed) {
       return `${MONTH_NAMES_EN_SHORT[parsed.month - 1]}-${parsed.year}`;
     }
@@ -352,6 +431,8 @@ export function formatAnalysisDateForChart(
     const ymp = parseIsoYearMonthForLabel(value);
     if (ymp) return `${MONTH_NAMES_SHORT[ymp.month - 1] ?? ""} ${ymp.year}`.trim();
     if (typeof value === "string") {
+      const labeled = parseMonthYearLabel(value);
+      if (labeled) return `${MONTH_NAMES_SHORT[labeled.month - 1] ?? ""} ${labeled.year}`.trim();
       const slashMy = parseSlashMonthYearForLabel(value);
       if (slashMy) return `${MONTH_NAMES_SHORT[slashMy.month - 1] ?? ""} ${slashMy.year}`.trim();
       const slashYmp = resolveMonthYearFromAmbiguousSlash(value, parseOpts);

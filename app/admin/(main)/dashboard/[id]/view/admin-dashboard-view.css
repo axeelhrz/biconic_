@@ -190,7 +190,7 @@
 .admin-view-page .admin-dashboard-view [data-role="canvas"] > div.grid {
   display: grid !important;
   /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX en lib/dashboard/gridLayout.ts */
-  grid-auto-rows: minmax(56px, auto);
+  grid-auto-rows: 56px;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   background: none;
   border: none;

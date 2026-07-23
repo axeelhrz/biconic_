@@ -59,9 +59,12 @@ import {
   resolveWidgetCompareStatus,
   resolveShowCardHeaderStrip,
 } from "@/lib/dashboard/compareDisplayKeys";
+import { chartUsesDualAxis } from "@/lib/dashboard/chartMetricAxis";
 import {
   isAttributeResultKey,
+  resolveArgmaxDimensionLabel,
   resolveDashboardKpiDisplayValue,
+  wantsAttributeDimensionDisplay,
   type MetricDisplayRoleLike,
 } from "@/lib/dashboard/metricDisplayRole";
 import {
@@ -472,6 +475,17 @@ export function DashboardWidgetRenderer({
 
     if (yKey) {
       const scope = (widget as DashboardWidgetRendererWidget).kpiUserTimeScope ?? null;
+      if (
+        wantsAttributeDimensionDisplay({
+          resultDisplayMode: (aggCfg as { resultDisplayMode?: string } | undefined)?.resultDisplayMode,
+          resultAttributeDimension: (aggCfg as { resultAttributeDimension?: string } | undefined)?.resultAttributeDimension,
+        })
+      ) {
+        const dim = String((aggCfg as { resultAttributeDimension?: string }).resultAttributeDimension ?? "").trim();
+        const pick =
+          (aggCfg as { resultAttributePick?: string } | undefined)?.resultAttributePick === "min" ? "min" : "max";
+        return resolveArgmaxDimensionLabel(rows, yKey, dim, pick);
+      }
       const isAttribute = isAttributeResultKey(yKey, metricsKpi);
       if (isAttribute) {
         const display = resolveDashboardKpiDisplayValue(rows, yKey, true);
@@ -724,8 +738,23 @@ export function DashboardWidgetRenderer({
       : hasSeriesDimension &&
         (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
         (typeof aggConfig?.chartStackBySeries === "boolean" ? aggConfig.chartStackBySeries : true);
+  const yKeysCountForDual = Array.isArray(aggConfig?.chartYAxes) ? aggConfig.chartYAxes.length : 0;
+  const dualAxisConfigured = chartUsesDualAxis(
+    aggConfig as { chartDualAxis?: boolean; chartType?: string } | undefined,
+    chartType,
+    Math.max(yKeysCountForDual, chartConfig?.datasets?.length ?? 0)
+  );
+  const datasetsHaveY1 = (chartConfig?.datasets ?? []).some(
+    (d) => String((d as { yAxisID?: string }).yAxisID ?? "") === "y1"
+  );
+  const isDualAxisChart =
+    !stackBySeriesEnabled &&
+    (chartType === "combo" || dualAxisConfigured || datasetsHaveY1) &&
+    (chartConfig?.datasets?.length ?? 0) >= 2;
   const isCombo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
-  const comboSyncAxes = isCombo && aggConfig?.chartComboSyncAxes === true;
+  const comboSyncAxes =
+    isDualAxisChart &&
+    (aggConfig as { chartComboSyncAxes?: boolean } | undefined)?.chartComboSyncAxes === true;
 
   const pieChartWrapRef = useRef<HTMLDivElement>(null);
   const [pieContainerWidth, setPieContainerWidth] = useState(0);
@@ -745,24 +774,44 @@ export function DashboardWidgetRenderer({
   }, [chartType]);
 
   const effectiveChartData = useMemo((): ChartConfig | null | undefined => {
-    if (!isCombo || !chartConfig?.datasets?.[0]?.data || !chartConfig?.datasets?.[1]?.data) return chartConfig ?? null;
+    if (!isDualAxisChart || !chartConfig?.datasets?.length) return chartConfig ?? null;
     if (!comboSyncAxes) return chartConfig;
-    const d0 = chartConfig.datasets[0].data as number[];
-    const d1 = chartConfig.datasets[1].data as number[];
-    const min0 = Math.min(...d0);
-    const max0 = Math.max(...d0);
-    const min1 = Math.min(...d1);
-    const max1 = Math.max(...d1);
-    const range0 = max0 - min0 || 1;
-    const range1 = max1 - min1 || 1;
+
+    const groups: Record<"y" | "y1", { indices: number[]; values: number[] }> = {
+      y: { indices: [], values: [] },
+      y1: { indices: [], values: [] },
+    };
+    chartConfig.datasets.forEach((ds, i) => {
+      const id = String((ds as { yAxisID?: string }).yAxisID ?? "y") === "y1" ? "y1" : "y";
+      const data = (ds.data as number[]) ?? [];
+      groups[id].indices.push(i);
+      for (const v of data) {
+        if (Number.isFinite(v)) groups[id].values.push(v);
+      }
+    });
+
+    const normalizeGroup = (axis: "y" | "y1") => {
+      const vals = groups[axis].values;
+      if (vals.length === 0) return { min: 0, range: 1 };
+      const min = Math.min(...vals);
+      const max = Math.max(...vals);
+      return { min, range: max - min || 1 };
+    };
+    const g0 = normalizeGroup("y");
+    const g1 = normalizeGroup("y1");
+
     return {
       labels: chartConfig.labels,
-      datasets: [
-        { ...chartConfig.datasets[0], data: d0.map((v) => (v - min0) / range0) },
-        { ...chartConfig.datasets[1], data: d1.map((v) => (v - min1) / range1) },
-      ],
+      datasets: chartConfig.datasets.map((ds, i) => {
+        const id = String((ds as { yAxisID?: string }).yAxisID ?? "y") === "y1" ? "y1" : "y";
+        const g = id === "y1" ? g1 : g0;
+        const data = ((ds.data as number[]) ?? []).map((v) =>
+          Number.isFinite(v) ? (v - g.min) / g.range : v
+        );
+        return { ...ds, data };
+      }),
     };
-  }, [isCombo, comboSyncAxes, chartConfig]);
+  }, [isDualAxisChart, comboSyncAxes, chartConfig]);
 
   const chartAccentForPercent = useMemo(
     () =>
@@ -775,14 +824,19 @@ export function DashboardWidgetRenderer({
   );
 
   const percentDenomResolver = useMemo(
-    () =>
-      createChartPercentDenominatorResolver({
-        basisRaw: widget.chartPercentBasis,
+    () => {
+      const quickCalc = normalizeChartQuickCalc(
+        (widget.aggregationConfig as { chartQuickCalc?: unknown } | undefined)?.chartQuickCalc
+      );
+      const basisFromQuick = chartQuickCalcToPercentBasis(quickCalc);
+      return createChartPercentDenominatorResolver({
+        basisRaw: basisFromQuick ?? widget.chartPercentBasis,
         fullRows: widget.rows as Record<string, unknown>[] | undefined,
         widget: widget as unknown as ChartPercentWidgetLike,
         chartConfig: chartConfig ?? null,
         accentColor: chartAccentForPercent,
-      }),
+      });
+    },
     [
       widget.chartPercentBasis,
       widget.rows,
@@ -831,17 +885,6 @@ export function DashboardWidgetRenderer({
       pieIntegratedNameOrder?: "above" | "below";
       chartQuickCalc?: ChartQuickCalc;
     } | undefined;
-    const style: ChartStyleConfig | undefined = {
-      ...mergeChartVisualStyle(widget.aggregationConfig as AggregationLike),
-      ...(widget.chartStyle as ChartStyleConfig | undefined),
-      ...(agg && {
-        gridXDisplay: agg.chartGridXDisplay,
-        gridYDisplay: agg.chartGridYDisplay,
-        gridColor: agg.chartGridColor,
-        axisXVisible: agg.chartAxisXVisible,
-        axisYVisible: agg.chartAxisYVisible,
-      }),
-    };
     const labelMaxVisible =
       typeof agg?.labelVisibilityMaxCount === "number" && Number.isFinite(agg.labelVisibilityMaxCount) && agg.labelVisibilityMaxCount >= 2
         ? Math.floor(agg.labelVisibilityMaxCount)
@@ -860,12 +903,28 @@ export function DashboardWidgetRenderer({
     const percentBasis = normalizeChartPercentBasis(
       quickCalcPercent ? (chartQuickCalcToPercentBasis(quickCalc) ?? widget.chartPercentBasis) : widget.chartPercentBasis
     );
-    const pieLabelMode: ChartLabelDisplayMode =
-      quickCalcPercent ? "percent" : (widget.labelDisplayMode ?? "percent");
-    const cartesianLabelMode: ChartLabelDisplayMode =
-      quickCalcPercent ? "percent" : (widget.labelDisplayMode ?? "value");
+    // Los datasets ya vienen transformados a ratios por applyChartQuickCalc;
+    // mostrar con valueFormat percent (×100), sin volver a dividir por el total (labelMode percent).
+    const pieLabelMode: ChartLabelDisplayMode = quickCalcPercent
+      ? "value"
+      : (widget.labelDisplayMode ?? "percent");
+    const cartesianLabelMode: ChartLabelDisplayMode = quickCalcPercent
+      ? "value"
+      : (widget.labelDisplayMode ?? "value");
     const metricStyles = widget.chartMetricStyles as (ChartStyleConfig | undefined)[] | undefined;
     const usePerMetricFormat = Array.isArray(metricStyles) && metricStyles.length > 0;
+    const style: ChartStyleConfig | undefined = {
+      ...mergeChartVisualStyle(widget.aggregationConfig as AggregationLike),
+      ...(widget.chartStyle as ChartStyleConfig | undefined),
+      ...(agg && {
+        gridXDisplay: agg.chartGridXDisplay,
+        gridYDisplay: agg.chartGridYDisplay,
+        gridColor: agg.chartGridColor,
+        axisXVisible: agg.chartAxisXVisible,
+        axisYVisible: agg.chartAxisYVisible,
+      }),
+      ...(quickCalcPercent ? { valueFormat: "percent" as const } : {}),
+    };
     const optionsBase = getChartOptionsBase(darkChartTheme, chartDevicePixelRatio);
     const labelVisibilityMode = normalizeLabelVisibilityMode(agg?.labelVisibilityMode);
     const showDataLabels =
@@ -1166,7 +1225,7 @@ export function DashboardWidgetRenderer({
           : hasSeriesDimension &&
             (chartType === "bar" || chartType === "horizontalBar" || chartType === "combo") &&
             (typeof agg?.chartStackBySeries === "boolean" ? agg.chartStackBySeries : true);
-      const isComboTwo = chartType === "combo" && (chartConfig?.datasets?.length ?? 0) >= 2 && !stackBySeriesEnabled;
+      const isComboTwo = isDualAxisChart;
       const syncAxes = isComboTwo && (widget.aggregationConfig as { chartComboSyncAxes?: boolean } | undefined)?.chartComboSyncAxes === true;
       const axisTickColorResolved =
         style?.axisTickColor != null && String(style.axisTickColor).trim() !== ""
@@ -1178,8 +1237,14 @@ export function DashboardWidgetRenderer({
         size: style?.fontSize ?? 11,
         ...(style?.chartFontFamily ? { family: style.chartFontFamily } : {}),
       };
-      const axisTitle0 = String(chartConfig?.datasets?.[0]?.label ?? yAxisKeys[0] ?? "").trim();
-      const axisTitle1 = String(chartConfig?.datasets?.[1]?.label ?? yAxisKeys[1] ?? "").trim();
+      const leftDs = (chartConfig?.datasets ?? []).filter(
+        (d) => String((d as { yAxisID?: string }).yAxisID ?? "y") !== "y1"
+      );
+      const rightDs = (chartConfig?.datasets ?? []).filter(
+        (d) => String((d as { yAxisID?: string }).yAxisID ?? "") === "y1"
+      );
+      const axisTitle0 = String(leftDs[0]?.label ?? chartConfig?.datasets?.[0]?.label ?? yAxisKeys[0] ?? "").trim();
+      const axisTitle1 = String(rightDs[0]?.label ?? chartConfig?.datasets?.[1]?.label ?? yAxisKeys[1] ?? "").trim();
       let comboScales: Record<string, unknown> | undefined;
       let comboRanges:
         | {
@@ -1189,15 +1254,25 @@ export function DashboardWidgetRenderer({
             range1: number;
           }
         | undefined;
-      if (isComboTwo && chartConfig?.datasets?.[0]?.data && chartConfig?.datasets?.[1]?.data) {
-        const d0 = chartConfig.datasets[0].data as number[];
-        const d1 = chartConfig.datasets[1].data as number[];
-        const min0 = Math.min(...d0);
-        const max0 = Math.max(...d0);
-        const min1 = Math.min(...d1);
-        const max1 = Math.max(...d1);
-        const range0 = max0 - min0 || 1;
-        const range1 = max1 - min1 || 1;
+      if (isComboTwo && (chartConfig?.datasets?.length ?? 0) >= 2) {
+        const collect = (list: typeof leftDs) => {
+          const vals: number[] = [];
+          for (const ds of list) {
+            for (const v of (ds.data as number[]) ?? []) {
+              if (Number.isFinite(v)) vals.push(v);
+            }
+          }
+          if (vals.length === 0) return { min: 0, max: 1, range: 1 };
+          const min = Math.min(...vals);
+          const max = Math.max(...vals);
+          return { min, max, range: max - min || 1 };
+        };
+        const g0 = collect(leftDs.length ? leftDs : [chartConfig!.datasets![0]!]);
+        const g1 = collect(rightDs.length ? rightDs : [chartConfig!.datasets![1]!]);
+        const min0 = g0.min;
+        const range0 = g0.range;
+        const min1 = g1.min;
+        const range1 = g1.range;
         comboRanges = { min0, range0, min1, range1 };
         const style0 = (usePerMetricFormat && metricStyles[0]) ? metricStyles[0]! : style;
         const style1 = (usePerMetricFormat && metricStyles[1]) ? metricStyles[1]! : style;
@@ -1314,8 +1389,10 @@ export function DashboardWidgetRenderer({
 
       const toRawComboValue = (value: number, datasetIndex?: number): number => {
         if (!syncAxes || !comboRanges || datasetIndex == null) return value;
-        if (datasetIndex === 0) return value * comboRanges.range0 + comboRanges.min0;
-        return value * comboRanges.range1 + comboRanges.min1;
+        const ds = chartConfig?.datasets?.[datasetIndex] as { yAxisID?: string } | undefined;
+        const onRight = String(ds?.yAxisID ?? (datasetIndex === 0 ? "y" : "y1")) === "y1";
+        if (onRight) return value * comboRanges.range1 + comboRanges.min1;
+        return value * comboRanges.range0 + comboRanges.min0;
       };
       const formatCartesianPoint = (
         value: number,
@@ -1687,6 +1764,7 @@ export function DashboardWidgetRenderer({
   }, [
     chartType,
     chartConfig,
+    isDualAxisChart,
     widget.chartStyle,
     widget.chartMetricStyles,
     widget.labelDisplayMode,
@@ -1761,7 +1839,13 @@ export function DashboardWidgetRenderer({
     >
       {showCardHeader && (
         <header className="flex min-h-0 flex-shrink-0 flex-col gap-1 overflow-hidden border-b px-4 py-2" style={{ borderColor: "var(--platform-border, #e2e8f0)" }}>
-          <h3 className="min-w-0 truncate text-sm font-semibold" style={{ color: "var(--platform-fg, #0f172a)" }}>
+          <h3
+            className="min-w-0 truncate text-sm font-semibold"
+            style={{
+              color: "var(--platform-fg, #0f172a)",
+              ...(isTableWidget ? { fontSize: resolvedTableStyle.titleFontSize } : {}),
+            }}
+          >
             {widget.title}
           </h3>
           {compareStatus ? <CompareStatusStrip status={compareStatus} /> : null}
@@ -2016,10 +2100,16 @@ export function DashboardWidgetRenderer({
                       >
                         {effectiveTableColumnOrder.map((columnKey) => (
                           <div key={columnKey} className="mobile-dash-table-card-row">
-                            <span className="mobile-dash-table-card-label">
+                            <span
+                              className="mobile-dash-table-card-label"
+                              style={{ fontSize: resolvedTableStyle.headerFontSize }}
+                            >
                               {String(effectiveTableHeaderLabels?.[columnKey] ?? "").trim() || columnKey}
                             </span>
-                            <span className="mobile-dash-table-card-value">
+                            <span
+                              className="mobile-dash-table-card-value"
+                              style={{ fontSize: resolvedTableStyle.bodyFontSize }}
+                            >
                               {formatTableCellValue(columnKey, row[columnKey])}
                             </span>
                           </div>
@@ -2030,7 +2120,7 @@ export function DashboardWidgetRenderer({
                 ) : (
                   <div
                     className="dashboard-widget-table-scroll min-h-0 min-w-0 flex-1 overflow-auto rounded-md border"
-                    style={{ borderColor: "var(--platform-border)", fontSize: resolvedTableStyle.fontSize }}
+                    style={{ borderColor: "var(--platform-border)", fontSize: resolvedTableStyle.bodyFontSize }}
                   >
                     <table
                       className="w-full min-w-max border-collapse"
@@ -2106,57 +2196,95 @@ export function DashboardWidgetRenderer({
                 <label className="text-xs font-medium" style={{ color: "var(--platform-fg-muted)" }}>
                   {widget.filterConfig.label}
                 </label>
-                {widget.filterConfig.inputType === "multi" &&
-                String(widget.filterConfig.operator ?? "").toUpperCase() !== "YEAR" &&
-                Array.isArray(widget.facetValues?.[widget.filterConfig.field]) ? (
-                  (() => {
-                    const opts = (widget.facetValues![widget.filterConfig!.field] as unknown[]).map(String);
-                    const selected = (Array.isArray(filterValue) ? filterValue : filterValue != null && filterValue !== "" ? [filterValue] : []) as string[];
+                {(() => {
+                  const it = String(widget.filterConfig.inputType ?? "select").toLowerCase();
+                  const opUpper = String(widget.filterConfig.operator ?? "").toUpperCase();
+                  const field = widget.filterConfig.field;
+                  const facetRaw = field ? widget.facetValues?.[field] : undefined;
+                  const opts = Array.isArray(facetRaw) ? (facetRaw as unknown[]).map(String) : [];
+                  const wantsMulti = it === "multi" && opUpper !== "YEAR";
+                  // multi y select siempre como controles de opciones (nunca input libre).
+                  if (wantsMulti) {
+                    const selected = (Array.isArray(filterValue)
+                      ? filterValue
+                      : filterValue != null && filterValue !== ""
+                        ? [filterValue]
+                        : []) as string[];
                     const selectedNorm = selected.map(String);
                     const toggle = (s: string, checked: boolean) => {
                       const next = checked ? [...selectedNorm, s] : selectedNorm.filter((x) => x !== s);
                       onFilterChange?.(widget.id, next);
                     };
                     return (
-                      <div className="flex flex-col gap-2 max-h-40 overflow-y-auto rounded-lg border p-2" style={{ borderColor: "var(--platform-border)" }}>
-                        {opts.map((s) => (
-                          <label key={s} className="flex items-center gap-2 cursor-pointer text-sm" style={{ color: "var(--platform-fg)" }}>
-                            <input
-                              type="checkbox"
-                              className="rounded border"
-                              style={{ borderColor: "var(--platform-border)" }}
-                              checked={selectedNorm.includes(s)}
-                              onChange={(e) => toggle(s, e.target.checked)}
-                            />
-                            <span>{s}</span>
-                          </label>
-                        ))}
+                      <div
+                        className="flex max-h-40 flex-col gap-2 overflow-y-auto rounded-lg border p-2"
+                        style={{ borderColor: "var(--platform-border)" }}
+                      >
+                        {opts.length === 0 ? (
+                          <span className="text-xs" style={{ color: "var(--platform-fg-muted)" }}>
+                            Cargando opciones…
+                          </span>
+                        ) : (
+                          opts.map((s) => (
+                            <label
+                              key={s}
+                              className="flex cursor-pointer items-center gap-2 text-sm"
+                              style={{ color: "var(--platform-fg)" }}
+                            >
+                              <input
+                                type="checkbox"
+                                className="rounded border"
+                                style={{ borderColor: "var(--platform-border)" }}
+                                checked={selectedNorm.includes(s)}
+                                onChange={(e) => toggle(s, e.target.checked)}
+                              />
+                              <span>{s}</span>
+                            </label>
+                          ))
+                        )}
                       </div>
                     );
-                  })()
-                ) : ((widget.filterConfig.inputType === "select" ||
-                    String(widget.filterConfig.operator ?? "").toUpperCase() === "YEAR") &&
-                  Array.isArray(widget.facetValues?.[widget.filterConfig.field])) ? (
-                  <select
-                    className="w-full rounded-lg border px-3 py-2 text-sm"
-                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
-                    value={Array.isArray(filterValue) ? (filterValue as string[])?.[0] ?? "" : String(filterValue ?? "")}
-                    onChange={(e) => onFilterChange?.(widget.id, e.target.value)}
-                  >
-                    <option value="">Todos</option>
-                    {(widget.facetValues![widget.filterConfig!.field] as unknown[]).map((v) => (
-                      <option key={String(v)} value={String(v)}>{String(v)}</option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type={widget.filterConfig.inputType === "number" ? "number" : widget.filterConfig.inputType === "date" ? "date" : "text"}
-                    className="w-full rounded-lg border px-3 py-2 text-sm"
-                    style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
-                    value={Array.isArray(filterValue) ? (filterValue as string[])?.[0] ?? "" : String(filterValue ?? "")}
-                    onChange={(e) => onFilterChange?.(widget.id, widget.filterConfig?.inputType === "number" ? e.target.valueAsNumber : e.target.value)}
-                  />
-                )}
+                  }
+                  if (it === "select" || opUpper === "YEAR") {
+                    return (
+                      <select
+                        className="w-full rounded-lg border px-3 py-2 text-sm"
+                        style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                        value={
+                          Array.isArray(filterValue)
+                            ? (filterValue as string[])?.[0] ?? ""
+                            : String(filterValue ?? "")
+                        }
+                        onChange={(e) => onFilterChange?.(widget.id, e.target.value)}
+                      >
+                        <option value="">Todos</option>
+                        {opts.map((v) => (
+                          <option key={v} value={v}>
+                            {v}
+                          </option>
+                        ))}
+                      </select>
+                    );
+                  }
+                  return (
+                    <input
+                      type={it === "number" ? "number" : it === "date" ? "date" : "text"}
+                      className="w-full rounded-lg border px-3 py-2 text-sm"
+                      style={{ borderColor: "var(--platform-border)", background: "var(--platform-bg)" }}
+                      value={
+                        Array.isArray(filterValue)
+                          ? (filterValue as string[])?.[0] ?? ""
+                          : String(filterValue ?? "")
+                      }
+                      onChange={(e) =>
+                        onFilterChange?.(
+                          widget.id,
+                          it === "number" ? e.target.valueAsNumber : e.target.value
+                        )
+                      }
+                    />
+                  );
+                })()}
               </div>
             )}
             {chartType === "map" && (

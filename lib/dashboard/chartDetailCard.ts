@@ -161,10 +161,15 @@ export function formatDetailCardScalar(value: number, line: ChartDetailCardLine)
     );
   }
   if (line.valueFormat === "percent" && line.kind === "row") {
-    const asRatio = Math.abs(value) <= 1 && !Number.isInteger(value);
-    const pct = asRatio ? value * 100 : value;
-    const d = line.decimals ?? 1;
-    return `${pct.toLocaleString("es-ES", { maximumFractionDigits: d, minimumFractionDigits: 0 })}%`;
+    // Misma semántica que formatValue: ratio → ×100 + %.
+    return formatValue(
+      value,
+      "percent",
+      st.currencySymbol ?? "$",
+      (st.valueScale ?? "none") as ValueScaleType,
+      line.decimals ?? 1,
+      st.useGrouping !== false
+    );
   }
   return formatValue(
     value,

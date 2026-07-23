@@ -16,6 +16,7 @@ import {
   AdminResourceCardGrid,
 } from "@/components/admin/AdminClientGroupSections";
 import { groupItemsByClient, clientDisplayName } from "@/lib/admin/clientGrouping";
+import { resolveDashboardCoverImageUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 // Shape for mapping Supabase rows
 type SupabaseDashboardRow = {
@@ -116,7 +117,11 @@ export default function AdminDashboardGrid({
           return {
             id: String(row.id),
             title: row.title ?? row.name ?? "Sin título",
-            imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
+            imageUrl: resolveDashboardCoverImageUrl({
+              layout: row.layout,
+              image_url: row.image_url,
+              thumbnail_url: row.thumbnail_url,
+            }),
             status,
             description: row.description ?? "",
             views: typeof row.views === "number" ? row.views : 0,

@@ -5,6 +5,7 @@ import { getBackendApiUrl, shouldUseOwnBackend } from "@/lib/api/backend-config"
 import { cookies } from "next/headers";
 import { createServiceRoleClient } from "@/lib/supabase/service";
 import { Database } from "@/lib/supabase/database.types";
+import { resolveDashboardCoverImageUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 // --- Types ---
 
@@ -491,7 +492,11 @@ export async function getDashboardsAction() {
             return {
               id: String(row.id),
               title: row.title ?? row.name ?? "Sin título",
-              imageUrl: row.image_url ?? row.thumbnail_url ?? "/Image.svg",
+              imageUrl: resolveDashboardCoverImageUrl({
+                layout: row.layout,
+                image_url: row.image_url,
+                thumbnail_url: row.thumbnail_url,
+              }),
               status,
               description: row.description ?? "",
               views: typeof row.views === "number" ? row.views : 0,

@@ -33,6 +33,9 @@ export function TableStyleFields({ value, columnKeys, onChange, variant = "studi
       merged.rowHeight != null ||
       merged.headerHeight != null ||
       merged.fontSize != null ||
+      merged.headerFontSize != null ||
+      merged.bodyFontSize != null ||
+      merged.titleFontSize != null ||
       merged.cellPaddingX != null ||
       merged.cellPaddingY != null ||
       merged.defaultColumnWidth != null ||
@@ -82,7 +85,7 @@ export function TableStyleFields({ value, columnKeys, onChange, variant = "studi
           />
         </div>
         <div>
-          <Label className={labelClass}>Tamaño de fuente (px)</Label>
+          <Label className={labelClass}>Tamaño de fuente general (px)</Label>
           <Input
             type="number"
             min={9}
@@ -92,6 +95,9 @@ export function TableStyleFields({ value, columnKeys, onChange, variant = "studi
             placeholder={String(DEFAULT_TABLE_STYLE.fontSize)}
             onChange={(e) => patch({ fontSize: numOrUndef(e.target.value) })}
           />
+          <p className="mt-0.5 text-[10px] text-[var(--studio-fg-muted)]">
+            Aplica a encabezados, celdas y título si no configurás tamaños por separado.
+          </p>
         </div>
         <div>
           <Label className={labelClass}>Ancho default de columnas (px)</Label>
@@ -103,6 +109,42 @@ export function TableStyleFields({ value, columnKeys, onChange, variant = "studi
             value={v.defaultColumnWidth ?? ""}
             placeholder={String(DEFAULT_TABLE_STYLE.defaultColumnWidth)}
             onChange={(e) => patch({ defaultColumnWidth: numOrUndef(e.target.value) })}
+          />
+        </div>
+        <div>
+          <Label className={labelClass}>Fuente encabezados (px)</Label>
+          <Input
+            type="number"
+            min={9}
+            max={28}
+            className={`mt-1 ${inputClass}`}
+            value={v.headerFontSize ?? ""}
+            placeholder="Igual al general"
+            onChange={(e) => patch({ headerFontSize: numOrUndef(e.target.value) })}
+          />
+        </div>
+        <div>
+          <Label className={labelClass}>Fuente celdas / medidas (px)</Label>
+          <Input
+            type="number"
+            min={9}
+            max={28}
+            className={`mt-1 ${inputClass}`}
+            value={v.bodyFontSize ?? ""}
+            placeholder="Igual al general"
+            onChange={(e) => patch({ bodyFontSize: numOrUndef(e.target.value) })}
+          />
+        </div>
+        <div>
+          <Label className={labelClass}>Fuente título de tarjeta (px)</Label>
+          <Input
+            type="number"
+            min={9}
+            max={32}
+            className={`mt-1 ${inputClass}`}
+            value={v.titleFontSize ?? ""}
+            placeholder="Igual al general"
+            onChange={(e) => patch({ titleFontSize: numOrUndef(e.target.value) })}
           />
         </div>
         <div>

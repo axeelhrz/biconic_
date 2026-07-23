@@ -95,8 +95,14 @@ export type DashboardPersistedLayout = {
   cardLayoutMode?: DashboardCardLayoutMode;
   /** Comparación por defecto del dashboard (widgets heredan salvo override). */
   dashboardCompareDefaults?: DashboardCompareDefaults;
-  /** Mes de inicio del año fiscal (1–12). Por defecto 1 (enero, año calendario). */
+  /** Mes de inicio del año fiscal (1–12). Por defecto 1 (enero, año calendario). Afecta agrupaciones year/quarter/semester y YTD. */
   fiscalYearStartMonth?: number;
+  /** Imagen de portada para la tarjeta de previsualización (listado admin/viewer). */
+  coverImageUrl?: string;
+  /** Dataset principal elegido al crear el dashboard. */
+  boundDatasetId?: string;
+  /** Datasets vinculados al crear (pueden mapear a uno o más ETL en data sources). */
+  boundDatasetIds?: string[];
 };
 
 export const DEFAULT_DASHBOARD_THEME: DashboardTheme = {

@@ -13,6 +13,7 @@ import {
 import { getServerAuthUser } from "@/lib/supabase/server-backend";
 import type { Dashboard } from "@/components/dashboard/DashboardCard";
 import { dashboardPublishedStatusFromRow } from "@/lib/dashboard/dashboardPublishedFromRow";
+import { resolveDashboardCoverImageUrl } from "@/lib/dashboard/dashboardCoverImage";
 
 type DashboardInsert = Database["public"]["Tables"]["dashboard"]["Insert"];
 
@@ -68,7 +69,11 @@ export async function listAdminDashboardsForGrid(): Promise<Dashboard[]> {
     return {
       id: String(row.id),
       title: String(row.title ?? row.name ?? "Sin título"),
-      imageUrl: String(row.image_url ?? row.thumbnail_url ?? "/Image.svg"),
+      imageUrl: resolveDashboardCoverImageUrl({
+        layout: row.layout,
+        image_url: row.image_url,
+        thumbnail_url: row.thumbnail_url,
+      }),
       status: dashboardPublishedStatusFromRow(row as { published?: boolean; visibility?: string; status?: string }),
       description: String(row.description ?? ""),
       views: typeof row.views === "number" ? row.views : 0,
@@ -121,7 +126,7 @@ export async function searchClients(query: string) {
 export async function createDashboardAdmin(
   clientId: string,
   title: string = "Nuevo Dashboard",
-  etlIdOrIds?: string | string[] | null
+  datasetIdOrIds?: string | string[] | null
 ) {
   const supabase = await createClient();
   const {
@@ -132,26 +137,79 @@ export async function createDashboardAdmin(
     return { ok: false, error: "Unauthorized" };
   }
 
-  const etlIds = Array.isArray(etlIdOrIds)
-    ? etlIdOrIds.filter(Boolean)
-    : etlIdOrIds
-    ? [etlIdOrIds]
-    : [];
+  const datasetIds = Array.isArray(datasetIdOrIds)
+    ? datasetIdOrIds.map((id) => String(id).trim()).filter(Boolean)
+    : datasetIdOrIds
+      ? [String(datasetIdOrIds).trim()].filter(Boolean)
+      : [];
 
-  if (etlIds.length === 0) {
+  if (datasetIds.length === 0) {
     return {
       ok: false,
-      error: "Seleccioná al menos un ETL como fuente de datos del dashboard.",
+      error: "Seleccioná al menos un dataset como fuente de datos del dashboard.",
     };
   }
 
-  const firstEtlId = etlIds[0] ?? null;
+  const { data: datasetRows, error: dsErr } = await supabase
+    .from("dataset")
+    .select("id, etl_id, name")
+    .in("id", datasetIds);
 
+  if (dsErr) {
+    console.error("Error loading datasets for dashboard create:", dsErr);
+    return { ok: false, error: dsErr.message };
+  }
+
+  const datasets = Array.isArray(datasetRows) ? datasetRows : [];
+  if (datasets.length !== datasetIds.length) {
+    return { ok: false, error: "Uno o más datasets no existen o no están disponibles." };
+  }
+
+  const etlIdsOrdered: string[] = [];
+  const seenEtl = new Set<string>();
+  for (const id of datasetIds) {
+    const row = datasets.find((d) => String(d.id) === id);
+    const etlId = row?.etl_id != null ? String(row.etl_id) : "";
+    if (!etlId || seenEtl.has(etlId)) continue;
+    seenEtl.add(etlId);
+    etlIdsOrdered.push(etlId);
+  }
+
+  if (etlIdsOrdered.length === 0) {
+    return { ok: false, error: "Los datasets seleccionados no tienen un ETL asociado." };
+  }
+
+  const { data: etlRows, error: etlErr } = await supabase
+    .from("etl")
+    .select("id, client_id, title, name")
+    .in("id", etlIdsOrdered);
+
+  if (etlErr) {
+    console.error("Error validating ETL ownership for dashboard create:", etlErr);
+    return { ok: false, error: etlErr.message };
+  }
+
+  const etls = Array.isArray(etlRows) ? etlRows : [];
+  const foreign = etls.find((e) => String(e.client_id ?? "") !== String(clientId));
+  if (foreign || etls.length !== etlIdsOrdered.length) {
+    return {
+      ok: false,
+      error: "Solo podés usar datasets del cliente seleccionado.",
+    };
+  }
+
+  const firstEtlId = etlIdsOrdered[0] ?? null;
   const insertPayload: DashboardInsert = {
     client_id: clientId,
     user_id: user.id,
     title: title,
-    layout: { widgets: [], zoom: 1, grid: 20 },
+    layout: {
+      widgets: [],
+      zoom: 1,
+      grid: 20,
+      boundDatasetId: datasetIds[0],
+      boundDatasetIds: datasetIds,
+    },
     ...(firstEtlId ? { etl_id: firstEtlId } : {}),
   };
 
@@ -166,23 +224,141 @@ export async function createDashboardAdmin(
     return { ok: false, error: error.message };
   }
 
-  if (etlIds.length > 0) {
-    const { error: srcError } = await supabase.from("dashboard_data_sources").insert(
-      etlIds.map((etl_id, i) => ({
+  const { error: srcError } = await supabase.from("dashboard_data_sources").insert(
+    etlIdsOrdered.map((etl_id, i) => {
+      const dsForEtl = datasets.find((d) => String(d.etl_id) === etl_id);
+      const aliasFromDs = String(dsForEtl?.name ?? "").trim();
+      return {
         dashboard_id: data.id,
         etl_id,
-        alias: i === 0 ? "Principal" : `Fuente ${i + 1}`,
+        alias: aliasFromDs || (i === 0 ? "Principal" : `Fuente ${i + 1}`),
         sort_order: i,
-      }))
-    );
-    if (srcError) {
-      console.error("Error adding dashboard_data_sources:", srcError);
-      await supabase.from("dashboard").delete().eq("id", data.id);
-      return { ok: false, error: `No se pudo vincular el ETL: ${srcError.message}` };
-    }
+      };
+    })
+  );
+  if (srcError) {
+    console.error("Error adding dashboard_data_sources:", srcError);
+    await supabase.from("dashboard").delete().eq("id", data.id);
+    return { ok: false, error: `No se pudo vincular el dataset: ${srcError.message}` };
   }
 
   return { ok: true, dashboardId: data.id };
+}
+
+export type DatasetSearchResult = {
+  id: string;
+  name: string;
+  etlId: string;
+  etlTitle: string;
+};
+
+/** Datasets del cliente (vía etl.client_id). */
+export async function searchDatasetsForClient(
+  clientId: string,
+  query: string = ""
+): Promise<DatasetSearchResult[]> {
+  const trimmedClient = String(clientId ?? "").trim();
+  if (!trimmedClient) return [];
+
+  const supabase = await createClient();
+  const { data: etlRows, error: etlErr } = await supabase
+    .from("etl")
+    .select("id, title, name")
+    .eq("client_id", trimmedClient);
+
+  if (etlErr) {
+    console.error("Error listing client ETLs for datasets:", etlErr);
+    return [];
+  }
+
+  const etls = Array.isArray(etlRows) ? etlRows : [];
+  if (etls.length === 0) return [];
+
+  const etlTitleById = new Map(
+    etls.map((e) => [
+      String(e.id),
+      String(e.title || e.name || "Sin título").trim() || "Sin título",
+    ])
+  );
+  const etlIds = etls.map((e) => String(e.id));
+
+  let dsQuery = supabase
+    .from("dataset")
+    .select("id, etl_id, name, updated_at")
+    .in("etl_id", etlIds)
+    .order("updated_at", { ascending: false })
+    .limit(50);
+
+  const q = query.trim();
+  if (q) {
+    dsQuery = dsQuery.ilike("name", `%${q}%`);
+  }
+
+  const { data: dsRows, error: dsErr } = await dsQuery;
+  if (dsErr) {
+    console.error("Error searching datasets for client:", dsErr);
+    return [];
+  }
+
+  return (Array.isArray(dsRows) ? dsRows : []).map((row) => {
+    const etlId = String(row.etl_id ?? "");
+    const name = String(row.name ?? "").trim();
+    const etlTitle = etlTitleById.get(etlId) ?? "ETL";
+    return {
+      id: String(row.id),
+      name: name || `Dataset · ${etlTitle}`,
+      etlId,
+      etlTitle,
+    };
+  });
+}
+
+/** Semilla al crear dashboard desde un ETL (`?create=1&etlId=`). */
+export async function getCreateDashboardSeedFromEtl(etlId: string): Promise<{
+  clientId: string | null;
+  clientName: string | null;
+  datasets: DatasetSearchResult[];
+} | null> {
+  const id = String(etlId ?? "").trim();
+  if (!id) return null;
+
+  const supabase = await createClient();
+  const { data: etl, error } = await supabase
+    .from("etl")
+    .select("id, client_id, title, name")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error || !etl) {
+    console.error("Error loading ETL seed for dashboard create:", error);
+    return null;
+  }
+
+  const clientId = etl.client_id != null ? String(etl.client_id) : null;
+  let clientName: string | null = null;
+  if (clientId) {
+    const { data: client } = await supabase
+      .from("clients")
+      .select("company_name, individual_full_name, name")
+      .eq("id", clientId)
+      .maybeSingle();
+    clientName =
+      String(
+        (client as { company_name?: string | null } | null)?.company_name ??
+          (client as { individual_full_name?: string | null } | null)?.individual_full_name ??
+          (client as { name?: string | null } | null)?.name ??
+          ""
+      ).trim() || null;
+  }
+
+  const datasets = clientId ? await searchDatasetsForClient(clientId, "") : [];
+  const forThisEtl = datasets.filter((d) => d.etlId === id);
+
+  return {
+    clientId,
+    clientName,
+    datasets: forThisEtl.length > 0 ? forThisEtl : datasets,
+  };
 }
 
 export async function searchEtls(query: string) {

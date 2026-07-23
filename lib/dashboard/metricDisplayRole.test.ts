@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   isAttributeMetric,
   metricChartNumericValue,
+  resolveArgmaxDimensionLabel,
   resolveDashboardKpiDisplayValue,
+  wantsAttributeDimensionDisplay,
 } from "@/lib/dashboard/metricDisplayRole";
 
 describe("metricDisplayRole", () => {
@@ -22,5 +24,22 @@ describe("metricDisplayRole", () => {
     const rows = [{ provincia: "Córdoba" }, { provincia: "Mendoza" }];
     expect(resolveDashboardKpiDisplayValue(rows, "provincia", true)).toBe("Córdoba");
     expect(resolveDashboardKpiDisplayValue(rows, "ventas", false)).toBe(0);
+  });
+
+  it("resolves argmax dimension label from metric values", () => {
+    const rows = [
+      { medio: "Facebook", reach: 100 },
+      { medio: "Instagram", reach: 500 },
+      { medio: "Twitter", reach: 200 },
+    ];
+    expect(resolveArgmaxDimensionLabel(rows, "reach", "medio", "max")).toBe("Instagram");
+    expect(resolveArgmaxDimensionLabel(rows, "reach", "medio", "min")).toBe("Facebook");
+    expect(resolveArgmaxDimensionLabel([], "reach", "medio")).toBe("—");
+  });
+
+  it("detects wantsAttributeDimensionDisplay", () => {
+    expect(wantsAttributeDimensionDisplay({ resultDisplayMode: "dimension", resultAttributeDimension: "medio" })).toBe(true);
+    expect(wantsAttributeDimensionDisplay({ resultDisplayMode: "number", resultAttributeDimension: "medio" })).toBe(false);
+    expect(wantsAttributeDimensionDisplay({ resultDisplayMode: "dimension", resultAttributeDimension: "" })).toBe(false);
   });
 });

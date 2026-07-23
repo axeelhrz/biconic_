@@ -101,9 +101,18 @@ export function createChartPercentDenominatorResolver(params: {
   }
   const { xKey, yKeys, resultKeys } = axis;
 
-  const analysisRows = getProcessedRowsForChart(fullRows, widget, { applyRankingSlice: false });
-  const visibleRows = getProcessedRowsForChart(fullRows, widget, { applyRankingSlice: true });
-  const analysisCfg = buildChartConfig(fullRows, widget, accent, { skipRanking: true }) ?? chartConfig;
+  // Evitar recursión: buildChartConfig aplica cálculo rápido, que vuelve a crear este resolver.
+  const widgetForDenom: ChartPercentWidgetLike = {
+    ...widget,
+    aggregationConfig: widget.aggregationConfig
+      ? ({ ...widget.aggregationConfig, chartQuickCalc: undefined } as ChartPercentWidgetLike["aggregationConfig"])
+      : widget.aggregationConfig,
+  };
+
+  const analysisRows = getProcessedRowsForChart(fullRows, widgetForDenom, { applyRankingSlice: false });
+  const visibleRows = getProcessedRowsForChart(fullRows, widgetForDenom, { applyRankingSlice: true });
+  const analysisCfg =
+    buildChartConfig(fullRows, widgetForDenom, accent, { skipRanking: true, skipQuickCalc: true }) ?? chartConfig;
 
   const xRawArr = chartConfig.xRawCategoryKeys;
   const rawXAt = (di: number): string => {

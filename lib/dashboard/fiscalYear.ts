@@ -38,12 +38,104 @@ export function fiscalMonthIndex(month1: number, startMonth: number): number {
   return month1 >= sm ? month1 - sm + 1 : month1 + 12 - sm + 1;
 }
 
+/** Trimestre fiscal (1-4) según mes de inicio. */
+export function fiscalQuarterIndex(month1: number, startMonth: number): number {
+  return Math.ceil(fiscalMonthIndex(month1, startMonth) / 3);
+}
+
+/** Semestre fiscal (1-2) según mes de inicio. */
+export function fiscalSemesterIndex(month1: number, startMonth: number): number {
+  return fiscalMonthIndex(month1, startMonth) <= 6 ? 1 : 2;
+}
+
 /**
- * Expresión SQL (PostgreSQL) para particionar YTD por año fiscal.
+ * Expresión SQL (PostgreSQL) para particionar YTD / agrupar por año fiscal.
  * `dateExpr` debe ser una expresión de fecha válida (p. ej. `"fecha"::date`).
  */
 export function sqlFiscalYearPartitionExpr(dateExpr: string, startMonth: number): string {
   const sm = normalizeFiscalYearStartMonth(startMonth);
   if (sm <= 1) return `EXTRACT(YEAR FROM ${dateExpr})`;
   return `(CASE WHEN EXTRACT(MONTH FROM ${dateExpr})::int >= ${sm} THEN EXTRACT(YEAR FROM ${dateExpr})::int ELSE EXTRACT(YEAR FROM ${dateExpr})::int - 1 END)`;
+}
+
+/** Índice de mes fiscal 1–12 en SQL. */
+export function sqlFiscalMonthIndexExpr(dateExpr: string, startMonth: number): string {
+  const sm = normalizeFiscalYearStartMonth(startMonth);
+  if (sm <= 1) return `EXTRACT(MONTH FROM ${dateExpr})::int`;
+  return `(CASE WHEN EXTRACT(MONTH FROM ${dateExpr})::int >= ${sm} THEN EXTRACT(MONTH FROM ${dateExpr})::int - ${sm} + 1 ELSE EXTRACT(MONTH FROM ${dateExpr})::int + ${12 - sm + 1} END)`;
+}
+
+/** Trimestre fiscal 1–4 en SQL. */
+export function sqlFiscalQuarterIndexExpr(dateExpr: string, startMonth: number): string {
+  return `CEIL(${sqlFiscalMonthIndexExpr(dateExpr, startMonth)} / 3.0)::int`;
+}
+
+/** Semestre fiscal 1–2 en SQL. */
+export function sqlFiscalSemesterIndexExpr(dateExpr: string, startMonth: number): string {
+  return `(CASE WHEN ${sqlFiscalMonthIndexExpr(dateExpr, startMonth)} <= 6 THEN 1 ELSE 2 END)`;
+}
+
+export type FiscalDateGroupExprs = {
+  /** Clave de GROUP BY / ORDER BY. */
+  groupExpr: string;
+  /** Texto visible en el resultado. */
+  displayExpr: string;
+};
+
+/**
+ * Expresiones SQL de agrupación temporal respetando el inicio de año fiscal
+ * para year / quarter / semester. day / week / month siguen el calendario.
+ */
+export function sqlFiscalAwareDateGroupExprs(
+  dateExpr: string,
+  granularity: string,
+  startMonth: number
+): FiscalDateGroupExprs | null {
+  const gran = String(granularity ?? "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "");
+  const sm = normalizeFiscalYearStartMonth(startMonth);
+  const ts = `${dateExpr}::timestamp`;
+
+  if (gran === "year") {
+    if (sm <= 1) {
+      const trunc = `DATE_TRUNC('year', ${ts})`;
+      return { groupExpr: trunc, displayExpr: `TO_CHAR(${trunc}, 'YYYY')` };
+    }
+    const fy = sqlFiscalYearPartitionExpr(ts, sm);
+    return { groupExpr: fy, displayExpr: `(${fy})::text` };
+  }
+
+  if (gran === "quarter") {
+    if (sm <= 1) {
+      const trunc = `DATE_TRUNC('quarter', ${ts})`;
+      return {
+        groupExpr: trunc,
+        displayExpr: `('T' || EXTRACT(QUARTER FROM ${trunc})::text || '/' || EXTRACT(YEAR FROM ${trunc})::text)`,
+      };
+    }
+    const fy = sqlFiscalYearPartitionExpr(ts, sm);
+    const fq = sqlFiscalQuarterIndexExpr(ts, sm);
+    return {
+      groupExpr: `((${fy})::text || '-Q' || (${fq})::text)`,
+      displayExpr: `('T' || (${fq})::text || '/' || (${fy})::text)`,
+    };
+  }
+
+  if (gran === "semester") {
+    if (sm <= 1) {
+      return {
+        groupExpr: `(EXTRACT(YEAR FROM ${ts})::text || '-S' || CASE WHEN EXTRACT(MONTH FROM ${ts}) <= 6 THEN '1' ELSE '2' END)`,
+        displayExpr: `(CASE WHEN EXTRACT(MONTH FROM ${ts}) <= 6 THEN 'S1/' ELSE 'S2/' END || EXTRACT(YEAR FROM ${ts})::text)`,
+      };
+    }
+    const fy = sqlFiscalYearPartitionExpr(ts, sm);
+    const fs = sqlFiscalSemesterIndexExpr(ts, sm);
+    return {
+      groupExpr: `((${fy})::text || '-S' || (${fs})::text)`,
+      displayExpr: `('S' || (${fs})::text || '/' || (${fy})::text)`,
+    };
+  }
+
+  return null;
 }

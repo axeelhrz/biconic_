@@ -284,8 +284,8 @@
 /* ─── Metric blocks — grid responsive y tarjetas configurables ──────────── */
 .studio-blocks {
   display: grid;
-  /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX en lib/dashboard/gridLayout.ts */
-  grid-auto-rows: minmax(56px, auto);
+  /* Mismo valor que DASHBOARD_GRID_ROW_UNIT_PX — fijo para que span N = altura predecible */
+  grid-auto-rows: 56px;
   grid-template-columns: 1fr;
   row-gap: 0.5rem;
   column-gap: 1rem;
@@ -323,14 +323,37 @@
 
 .studio-block-cell {
   display: flex;
-  align-items: flex-start;
+  align-items: stretch;
   min-width: 0;
   position: relative;
+  overflow: hidden;
+}
+.studio-block-cell .metric-block {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--studio-card-bg, var(--studio-surface));
+  border: var(--studio-card-border-width, 1px) solid var(--studio-card-border-color, var(--studio-border));
+  border-radius: var(--studio-card-radius, var(--studio-radius));
+  transition: box-shadow 0.22s ease, border-color 0.22s ease, background-color 0.22s ease, opacity 0.22s ease;
+  overflow: hidden;
+}
+
+.studio-blocks--dragging .studio-block-cell .metric-block,
+.metric-block--dragging {
+  transition: none;
+}
+
+.studio-blocks--dragging .studio-block-cell {
+  transition: none;
 }
 
 .metric-block--dragging {
   opacity: 0.92;
   box-shadow: 0 0 0 2px var(--studio-accent-glow);
+  cursor: grabbing;
 }
 
 .metric-block-drag-handle {
@@ -374,17 +397,6 @@
   .studio-resize-handle-e { width: 6px; }
   .studio-resize-handle-s { height: 6px; }
   .studio-resize-handle-se { width: 12px; height: 12px; }
-}
-.studio-block-cell .metric-block {
-  width: 100%;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--studio-card-bg, var(--studio-surface));
-  border: var(--studio-card-border-width, 1px) solid var(--studio-card-border-color, var(--studio-border));
-  border-radius: var(--studio-card-radius, var(--studio-radius));
-  transition: all 0.22s ease;
-  overflow: hidden;
 }
 .studio-add-metric-cell {
   grid-column: span 1;
