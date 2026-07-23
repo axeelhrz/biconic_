@@ -10,8 +10,10 @@ import type { DatasetDimensionsMap } from "@/types/dashboard";
 export interface DashboardDataSource {
   id: string;
   etlId: string;
+  datasetId?: string | null;
   alias: string;
   etlName: string;
+  datasetName?: string | null;
   schema: string;
   tableName: string;
   rowCount: number;
@@ -21,8 +23,9 @@ export interface DashboardDataSource {
     string: string[];
     date: string[];
   };
-  /** Métricas guardadas del ETL (layout.saved_metrics) para resolver por nombre en aggregate-data */
+  /** Métricas del dataset vinculado (fallback: etl.layout) */
   savedMetrics?: unknown[];
+  savedAnalyses?: unknown[];
 }
 
 export interface ETLDataResponse {

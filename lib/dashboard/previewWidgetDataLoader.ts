@@ -111,6 +111,7 @@ export type LoadPreviewWidgetDataParams = {
   widget: WidgetLike;
   tableName: string;
   etlId?: string | null;
+  datasetId?: string | null;
   sourceId?: string | null;
   datasetDimensions?: Record<string, Record<string, string>>;
   savedMetrics?: SavedMetricLike[];
@@ -223,6 +224,7 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     widget,
     tableName,
     etlId,
+    datasetId: datasetIdParam,
     sourceId,
     datasetDimensions,
     savedMetrics,
@@ -297,7 +299,13 @@ export async function loadPreviewWidgetData(params: LoadPreviewWidgetDataParams)
     const basePayloadParams = {
       tableName,
       etlId,
-      datasetId: typeof (agg as { datasetId?: string }).datasetId === "string" ? (agg as { datasetId: string }).datasetId : undefined,
+      datasetId:
+        (typeof datasetIdParam === "string" && datasetIdParam.trim()
+          ? datasetIdParam.trim()
+          : undefined) ??
+        (typeof (agg as { datasetId?: string }).datasetId === "string"
+          ? (agg as { datasetId: string }).datasetId
+          : undefined),
       chartType: type,
       agg: aggForPayload,
       sourceId,

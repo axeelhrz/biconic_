@@ -9,6 +9,9 @@ import {
   ETL_MAX_ROWS_CEILING,
   ETL_PREVIEW_MATERIALIZE_FAST_MAX_ROWS_PER_TABLE,
   ETL_PREVIEW_MATERIALIZE_MAX_ROWS_PER_TABLE,
+  FIREBIRD_COMPOSITE_KEYSET_BATCH,
+  FIREBIRD_IN_LIST_MAX,
+  getJoinKeysetBatchSize,
 } from "@/lib/etl/limits";
 import {
   buildDateFilterWhereFragmentPg,
@@ -1384,10 +1387,7 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
             }
             return resolveExcelQualifiedTableFromRows(String(conn.id), table, rows);
           };
-          const IN_KEYS_BATCH = Math.min(
-            2500,
-            Math.max(500, Number(process.env.ETL_JOIN_KEYSET_BATCH) || 1500)
-          );
+          const IN_KEYS_BATCH = getJoinKeysetBatchSize("firebird");
           const fetchRowsFromConn = async (
             conn: any,
             table: string,
@@ -1422,35 +1422,50 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
               };
               if (filterByKeys?.columns?.length && filterByKeys?.valueTuples?.length) {
                 const fbCols = filterByKeys.columns.map((c: any) => firebirdSafePart(c));
+                // Firebird: IN ≤1500; clave compuesta usa OR-AND con lotes más chicos.
+                const batchSize =
+                  fbCols.length === 1
+                    ? Math.min(IN_KEYS_BATCH, FIREBIRD_IN_LIST_MAX)
+                    : FIREBIRD_COMPOSITE_KEYSET_BATCH;
                 const allRows: Record<string, any>[] = [];
-                for (let b = 0; b < filterByKeys.valueTuples.length; b += IN_KEYS_BATCH) {
-                  const batch = filterByKeys.valueTuples.slice(b, b + IN_KEYS_BATCH);
-                  if (batch.length === 0) continue;
-                  const keysCondition =
-                    fbCols.length === 1
-                      ? `${fbCols[0]} IN (${batch.map((t: any) => escapeFbLiteral(t[0])).join(", ")})`
-                      : `(${batch.map((t: any) => fbCols.map((fc, i) => `${fc} = ${escapeFbLiteral(t[i])}`).join(" AND ")).join(" OR ")})`;
-                  const keysWhere = baseWhereFb ? `${baseWhereFb} AND ${keysCondition}` : ` WHERE ${keysCondition}`;
-                  let sqlFb = `SELECT ${cols} FROM ${tablePart}${keysWhere}`;
-                  if (dfParams.length > 0) {
-                    for (const p of dfParams) {
-                      const pos = sqlFb.indexOf("?");
-                      if (pos === -1) break;
-                      sqlFb = sqlFb.slice(0, pos) + escapeFbLiteral(p) + sqlFb.slice(pos + 1);
-                    }
-                  }
-                  const batchRows = await new Promise<Record<string, any>[]>((resolve, reject) => {
-                    Firebird.attach(opts, (err: Error | null, db: any) => {
-                      if (err) return reject(err);
-                      db.query(sqlFb, [], (qErr: Error | null, rows: any[]) => {
+                await new Promise<void>((resolve, reject) => {
+                  Firebird.attach(opts, (err: Error | null, db: any) => {
+                    if (err) return reject(err);
+                    const runBatch = (b: number) => {
+                      if (b >= filterByKeys.valueTuples.length) {
                         if (db?.detach) try { db.detach(() => {}); } catch (_) {}
-                        if (qErr) return reject(qErr);
-                        resolve((rows || []).map(normalizeRow));
+                        return resolve();
+                      }
+                      const batch = filterByKeys.valueTuples.slice(b, b + batchSize);
+                      if (batch.length === 0) {
+                        if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                        return resolve();
+                      }
+                      const keysCondition =
+                        fbCols.length === 1
+                          ? `${fbCols[0]} IN (${batch.map((t: any) => escapeFbLiteral(t[0])).join(", ")})`
+                          : `(${batch.map((t: any) => fbCols.map((fc, i) => `${fc} = ${escapeFbLiteral(t[i])}`).join(" AND ")).join(" OR ")})`;
+                      const keysWhere = baseWhereFb ? `${baseWhereFb} AND ${keysCondition}` : ` WHERE ${keysCondition}`;
+                      let sqlFb = `SELECT ${cols} FROM ${tablePart}${keysWhere}`;
+                      if (dfParams.length > 0) {
+                        for (const p of dfParams) {
+                          const pos = sqlFb.indexOf("?");
+                          if (pos === -1) break;
+                          sqlFb = sqlFb.slice(0, pos) + escapeFbLiteral(p) + sqlFb.slice(pos + 1);
+                        }
+                      }
+                      db.query(sqlFb, [], (qErr: Error | null, rows: any[]) => {
+                        if (qErr) {
+                          if (db?.detach) try { db.detach(() => {}); } catch (_) {}
+                          return reject(qErr);
+                        }
+                        allRows.push(...(rows || []).map(normalizeRow));
+                        runBatch(b + batchSize);
                       });
-                    });
+                    };
+                    runBatch(0);
                   });
-                  allRows.push(...batchRows);
-                }
+                });
                 return allRows;
               }
               const wherePart = baseWhereFb;

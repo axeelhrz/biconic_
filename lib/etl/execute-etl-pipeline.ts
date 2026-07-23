@@ -24,7 +24,7 @@ import {
   getValue,
   CastTargetType
 } from "@/lib/etl/transformations";
-import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT } from "@/lib/etl/limits";
+import { ETL_MAX_ROWS_CEILING, ETL_JOIN_CHUNK_SIZE_DEFAULT, FIREBIRD_IN_LIST_MAX, FIREBIRD_COMPOSITE_KEYSET_BATCH } from "@/lib/etl/limits";
 import {
   buildFirebirdSelectList,
   isFirebirdColumnQueryError,
@@ -519,7 +519,7 @@ export async function executeEtlPipeline(
   const PIPELINE_TIMEOUT_MS = Math.min(asPositiveInt(process.env.ETL_PIPELINE_TIMEOUT_MS, adaptiveTimeoutDefault), maxPipelineMs);
   console.log("[ETL Run] Timeout config:", { joinsCountForTimeout, hasAnyJoin, rawAdaptiveTimeout, adaptiveTimeoutDefault, PIPELINE_TIMEOUT_MS, maxPipelineMs, isRailwayRunner });
   const PAGE_SIZE = asPositiveInt(process.env.ETL_PAGE_SIZE, 60000);
-  const JOIN_KEYSET_SIZE = asPositiveInt(process.env.ETL_JOIN_KEYSET_SIZE, 3000);
+  const JOIN_KEYSET_SIZE = asPositiveInt(process.env.ETL_JOIN_KEYSET_SIZE, FIREBIRD_IN_LIST_MAX);
   const JOIN_CHUNK_SIZE = asPositiveInt(process.env.ETL_JOIN_CHUNK_SIZE, ETL_JOIN_CHUNK_SIZE_DEFAULT);
   const METRICS_LOG_EVERY_BATCHES = asPositiveInt(process.env.ETL_METRICS_LOG_EVERY_BATCHES, 5);
   let pipelineTimedOut = false;
@@ -1506,37 +1506,53 @@ export async function executeEtlPipeline(
           const compositeKeySep = "\u0001";
           const compositeKeyFb = (row: Record<string, any>, cols: string[]) =>
             cols.map((c: any) => String(getRowValFb(row, c) ?? "")).join(compositeKeySep);
-          const COMPOSITE_KEYSET_BATCH = 100;
+          const COMPOSITE_KEYSET_BATCH = FIREBIRD_COMPOSITE_KEYSET_BATCH;
           const rightKeyQuery = async (compositeKeys: string[]): Promise<Record<string, any>[]> => {
             if (compositeKeys.length === 0) return [];
             const isSingleCol = rightColsFb.length <= 1;
             if (isSingleCol) {
               const keys = compositeKeys;
-              const escapedList = keys.map((k: any) => escapeFb(k)).join(", ");
-              const rightKeyCond = { column: rightCol, operator: "in" as const, value: keys.join(",") };
-              const allRightConditions = [...rightConditions, rightKeyCond];
-              const { clause: rClause, params: rParams } = buildWhereClauseFirebird(allRightConditions);
-              const { clause: rDfClause, params: rDfParams } = buildDateFilterWhereFragmentFirebird(rightDateFilter);
-              const mergedRightClause = rDfClause ? (rClause ? `${rClause} AND ${rDfClause}` : `WHERE ${rDfClause}`) : rClause;
-              const mergedRightParams = [...rParams, ...rDfParams];
               if (String(hydratedConn2.type || "").toLowerCase() === "firebird") {
                 const opts2 = resolveFirebirdAttachOptions(hydratedConn2);
-                return new Promise((resolve, reject) => {
+                const cols = rightColumns.length ? rightColumns.map((c: any) => safePart(c)).join(", ") : "*";
+                const { clause: rDfClause, params: rDfParams } = buildDateFilterWhereFragmentFirebird(rightDateFilter);
+                const { clause: rBaseClause, params: rBaseParams } = buildWhereClauseFirebird(rightConditions);
+                const baseWhere = (() => {
+                  const parts: string[] = [];
+                  if (rBaseClause) parts.push(rBaseClause.replace(/^\s*WHERE\s+/i, ""));
+                  if (rDfClause) parts.push(rDfClause.replace(/^\s*WHERE\s+/i, ""));
+                  return parts.length ? ` WHERE ${parts.join(" AND ")}` : "";
+                })();
+                const baseParams = [...rBaseParams, ...rDfParams];
+                const allRight: Record<string, any>[] = [];
+                const inBatch = Math.min(JOIN_KEYSET_SIZE, FIREBIRD_IN_LIST_MAX);
+                await new Promise<void>((resolve, reject) => {
                   Firebird.attach(opts2, (err: Error | null, db2: any) => {
                     if (err) return reject(err);
-                    const cols = rightColumns.length ? rightColumns.map((c: any) => safePart(c)).join(", ") : "*";
-                    let sql = `SELECT FIRST ${ETL_MAX_ROWS_CEILING} ${cols} FROM ${rightTablePart} ${mergedRightClause}`.trim();
-                    sql = inlineClauseParams(sql, mergedRightParams);
-                    if (!/IN\s*\(/i.test(sql)) {
-                      sql = `${sql}${mergedRightClause ? " AND" : " WHERE"} ${safePart(rightCol)} IN (${escapedList})`;
-                    }
-                    db2.query(sql, [], (qerr: Error | null, rows: any[]) => {
-                      if (db2?.detach) try { db2.detach(() => {}); } catch (_) {}
-                      if (qerr) return reject(qerr);
-                      resolve((rows || []).map(normalizeRow));
-                    });
+                    const runBatch = (start: number) => {
+                      if (start >= keys.length) {
+                        if (db2?.detach) try { db2.detach(() => {}); } catch (_) {}
+                        return resolve();
+                      }
+                      const batch = keys.slice(start, start + inBatch);
+                      const escapedList = batch.map((k: any) => escapeFb(k)).join(", ");
+                      let sql = `SELECT FIRST ${ETL_MAX_ROWS_CEILING} ${cols} FROM ${rightTablePart}${baseWhere}${
+                        baseWhere ? " AND" : " WHERE"
+                      } ${safePart(rightCol)} IN (${escapedList})`;
+                      sql = inlineClauseParams(sql, baseParams);
+                      db2.query(sql, [], (qerr: Error | null, rows: any[]) => {
+                        if (qerr) {
+                          if (db2?.detach) try { db2.detach(() => {}); } catch (_) {}
+                          return reject(qerr);
+                        }
+                        allRight.push(...(rows || []).map(normalizeRow));
+                        runBatch(start + inBatch);
+                      });
+                    };
+                    runBatch(0);
                   });
                 });
+                return allRight;
               }
               const pwdPg = (conn2 as any).db_password_encrypted ? decryptConnectionPassword((conn2 as any).db_password_encrypted) : (conn2 as any).db_password ?? "";
               const pgClient = new PgClient({

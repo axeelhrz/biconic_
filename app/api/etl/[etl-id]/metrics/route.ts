@@ -6,6 +6,10 @@ import {
   findDuplicateNameWithinList,
   findDuplicateSavedMetricName,
 } from "@/lib/dashboard/savedMetricNames";
+import {
+  mergeDatasetConfigArtifacts,
+  resolveSavedArtifacts,
+} from "@/lib/dashboard/datasetSavedArtifacts";
 
 function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
   return supabase.auth.getUser().then(({ data: { user }, error }: any) => {
@@ -19,9 +23,8 @@ function requireAdmin(supabase: Awaited<ReturnType<typeof createClient>>) {
 }
 
 /**
- * GET /api/etl/[etl-id]/metrics
- * Devuelve las métricas guardadas del ETL (etl.layout.saved_metrics).
- * Requiere APP_ADMIN.
+ * GET /api/etl/[etl-id]/metrics?datasetId=
+ * Devuelve métricas/análisis del Dataset (config); fallback legacy a etl.layout.
  */
 export async function GET(
   request: NextRequest,
@@ -39,6 +42,8 @@ export async function GET(
     if (!etlId) {
       return NextResponse.json({ ok: false, error: "etl-id requerido" }, { status: 400 });
     }
+
+    const datasetIdParam = request.nextUrl.searchParams.get("datasetId")?.trim() || null;
 
     const { data: etlRow, error } = await supabase
       .from("etl")
@@ -58,20 +63,50 @@ export async function GET(
         derived_columns?: { name: string; expression: string; default_aggregation?: string }[];
       };
     } | undefined;
-    const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
-    const savedAnalyses = Array.isArray(layout?.saved_analyses) ? layout.saved_analyses : [];
-    const datasetConfig = layout?.dataset_config && typeof layout.dataset_config === "object" ? layout.dataset_config : undefined;
-    const rawDerived = datasetConfig?.derivedColumns ?? datasetConfig?.derived_columns;
+
+    let datasetConfig: Record<string, unknown> | undefined;
+    if (datasetIdParam) {
+      const { data: dsRow } = await supabase
+        .from("dataset")
+        .select("id, etl_id, config")
+        .eq("id", datasetIdParam)
+        .maybeSingle();
+      if (!dsRow || String((dsRow as { etl_id?: string }).etl_id) !== etlId) {
+        return NextResponse.json({ ok: false, error: "Dataset no encontrado para este ETL" }, { status: 404 });
+      }
+      const cfg = (dsRow as { config?: unknown }).config;
+      if (cfg && typeof cfg === "object") datasetConfig = cfg as Record<string, unknown>;
+    }
+
+    const { savedMetrics, savedAnalyses } = resolveSavedArtifacts({
+      datasetConfig,
+      etlLayout: layout,
+    });
+
+    const configForDerived =
+      datasetConfig ??
+      (layout?.dataset_config && typeof layout.dataset_config === "object"
+        ? (layout.dataset_config as Record<string, unknown>)
+        : undefined);
+    const rawDerived =
+      (configForDerived as { derivedColumns?: unknown; derived_columns?: unknown } | undefined)
+        ?.derivedColumns ??
+      (configForDerived as { derived_columns?: unknown } | undefined)?.derived_columns;
     const derivedColumns = Array.isArray(rawDerived)
       ? rawDerived.map((d: any) => ({
           name: d.name,
           expression: d.expression,
-          defaultAggregation: (d as { defaultAggregation?: string }).defaultAggregation ?? (d as { default_aggregation?: string }).default_aggregation ?? "SUM",
+          defaultAggregation:
+            (d as { defaultAggregation?: string }).defaultAggregation ??
+            (d as { default_aggregation?: string }).default_aggregation ??
+            "SUM",
         }))
       : undefined;
 
     const linkedDashboardId = (layout as any)?.linked_dashboard_id ?? null;
-    const dashboardFilters = Array.isArray((layout as any)?.dashboard_filters) ? (layout as any).dashboard_filters : [];
+    const dashboardFilters = Array.isArray((layout as any)?.dashboard_filters)
+      ? (layout as any).dashboard_filters
+      : [];
 
     return NextResponse.json({
       ok: true,
@@ -81,6 +116,7 @@ export async function GET(
         ...(derivedColumns != null && { datasetConfig: { derivedColumns } }),
         linkedDashboardId,
         dashboardFilters,
+        ...(datasetIdParam ? { datasetId: datasetIdParam } : {}),
       },
     });
   } catch (err: unknown) {
@@ -156,26 +192,33 @@ export async function PUT(
     }
 
     if (savedMetrics !== undefined) {
+      // Unicidad de nombres a nivel Dataset del mismo cliente (no a nivel ETL).
       const clientId = (etlRow as { client_id?: string | null }).client_id ?? null;
       if (clientId) {
-        const { data: siblingEtls, error: siblingErr } = await adminClient
+        const { data: clientEtls } = await adminClient
           .from("etl")
-          .select("id, title, layout")
-          .eq("client_id", clientId)
-          .neq("id", etlId);
-        if (!siblingErr && Array.isArray(siblingEtls)) {
+          .select("id")
+          .eq("client_id", clientId);
+        const clientEtlIds = (Array.isArray(clientEtls) ? clientEtls : []).map((e) => String(e.id));
+        if (clientEtlIds.length > 0) {
+          const { data: siblingDatasets } = await adminClient
+            .from("dataset")
+            .select("id, name, config, etl_id")
+            .in("etl_id", clientEtlIds);
           for (const m of savedMetrics as Array<{ id?: string; name?: string }>) {
             const name = String(m?.name ?? "").trim();
             if (!name) continue;
-            for (const sibling of siblingEtls) {
-              const layout = (sibling as { layout?: { saved_metrics?: unknown[] } }).layout;
-              const otherMetrics = Array.isArray(layout?.saved_metrics)
-                ? (layout.saved_metrics as Array<{ id?: string; name?: string }>)
-                : [];
+            for (const sibling of Array.isArray(siblingDatasets) ? siblingDatasets : []) {
+              if (datasetId && String(sibling.id) === datasetId) continue;
+              const cfg = (sibling as { config?: unknown }).config;
+              const otherMetrics = resolveSavedArtifacts({
+                datasetConfig: cfg,
+                etlLayout: null,
+              }).savedMetrics as Array<{ id?: string; name?: string }>;
               const clash = findDuplicateSavedMetricName(otherMetrics, name, null);
               if (clash) {
                 const siblingTitle =
-                  String((sibling as { title?: string }).title ?? "").trim() || "otro dataset";
+                  String((sibling as { name?: string }).name ?? "").trim() || "otro dataset";
                 return NextResponse.json(
                   {
                     ok: false,
@@ -191,14 +234,23 @@ export async function PUT(
     }
 
     const currentLayout = (etlRow as { layout?: Record<string, unknown> })?.layout ?? {};
+    // Con datasetId: métricas/análisis viven en dataset.config. El layout ETL solo guarda meta del pipeline.
+    const writeMetricsToEtlLayout = !datasetId;
     const updatedLayout = {
       ...currentLayout,
-      ...(savedMetrics !== undefined && { saved_metrics: JSON.parse(JSON.stringify(savedMetrics)) }),
-      ...(savedAnalyses !== undefined && { saved_analyses: JSON.parse(JSON.stringify(savedAnalyses)) }),
-      ...(dateColumnPeriodicityOverrides !== undefined && { date_column_periodicity_overrides: dateColumnPeriodicityOverrides }),
-      ...(datasetConfig !== undefined && { dataset_config: JSON.parse(JSON.stringify(datasetConfig)) }),
+      ...(writeMetricsToEtlLayout &&
+        savedMetrics !== undefined && { saved_metrics: JSON.parse(JSON.stringify(savedMetrics)) }),
+      ...(writeMetricsToEtlLayout &&
+        savedAnalyses !== undefined && { saved_analyses: JSON.parse(JSON.stringify(savedAnalyses)) }),
+      ...(dateColumnPeriodicityOverrides !== undefined && {
+        date_column_periodicity_overrides: dateColumnPeriodicityOverrides,
+      }),
+      ...(writeMetricsToEtlLayout &&
+        datasetConfig !== undefined && { dataset_config: JSON.parse(JSON.stringify(datasetConfig)) }),
       ...(linkedDashboardId !== undefined && { linked_dashboard_id: linkedDashboardId }),
-      ...(dashboardFilters !== undefined && { dashboard_filters: JSON.parse(JSON.stringify(dashboardFilters)) }),
+      ...(dashboardFilters !== undefined && {
+        dashboard_filters: JSON.parse(JSON.stringify(dashboardFilters)),
+      }),
     };
 
     const { error: updateError } = await adminClient
@@ -210,21 +262,28 @@ export async function PUT(
       return NextResponse.json({ ok: false, error: updateError.message }, { status: 500 });
     }
 
-    // Propagar métricas actualizadas a dashboards que usan este ETL (solo si se enviaron savedMetrics)
+    // Propagar solo a dashboards vinculados a este dataset (o ETL legacy).
     if (savedMetrics != null && savedMetrics.length > 0) {
-      await propagateMetricsToDashboards(adminClient, etlId, savedMetrics);
+      await propagateMetricsToDashboards(adminClient, etlId, savedMetrics, datasetId);
     }
 
     let datasetListUpdated = true;
     let savedDatasetId: string | undefined;
-    if (datasetConfig !== undefined) {
-      const configJson = JSON.parse(JSON.stringify(datasetConfig)) as Json;
+    const shouldPersistDatasetRow =
+      datasetId != null ||
+      createDataset ||
+      datasetConfig !== undefined ||
+      savedMetrics !== undefined ||
+      savedAnalyses !== undefined ||
+      datasetName !== undefined;
+
+    if (shouldPersistDatasetRow) {
       const now = new Date().toISOString();
       try {
         if (datasetId) {
           const { data: existing, error: fetchDsErr } = await adminClient
             .from("dataset")
-            .select("id, etl_id")
+            .select("id, etl_id, config")
             .eq("id", datasetId)
             .maybeSingle();
           if (fetchDsErr || !existing || (existing as { etl_id: string }).etl_id !== etlId) {
@@ -233,10 +292,15 @@ export async function PUT(
               { status: 404 }
             );
           }
+          const mergedConfig = mergeDatasetConfigArtifacts((existing as { config?: unknown }).config, {
+            savedMetrics,
+            savedAnalyses,
+            datasetConfig,
+          });
           const { error: datasetError } = await adminClient
             .from("dataset")
             .update({
-              config: configJson,
+              config: mergedConfig as Json,
               updated_at: now,
               ...(datasetName !== undefined && { name: datasetName }),
             })
@@ -248,22 +312,24 @@ export async function PUT(
             savedDatasetId = datasetId;
           }
         } else {
-          // Sin datasetId: solo crear un dataset nuevo si se pidió explícitamente (wizard de /admin/datasets).
-          // Para llamadas legacy (guardar métrica/columna sin datasetId): actualizar el único dataset del ETL si existe;
-          // con varios datasets no se toca la tabla (evita duplicados fantasma y pisar el dataset equivocado).
           const { data: existingRows } = await adminClient
             .from("dataset")
-            .select("id")
+            .select("id, config")
             .eq("etl_id", etlId)
             .order("updated_at", { ascending: false })
             .limit(2);
           const existingList = Array.isArray(existingRows) ? existingRows : [];
           if (createDataset || existingList.length === 0) {
+            const mergedConfig = mergeDatasetConfigArtifacts({}, {
+              savedMetrics,
+              savedAnalyses,
+              datasetConfig,
+            });
             const { data: inserted, error: datasetError } = await adminClient
               .from("dataset")
               .insert({
                 etl_id: etlId,
-                config: configJson,
+                config: mergedConfig as Json,
                 updated_at: now,
                 name: datasetName ?? null,
               })
@@ -276,20 +342,25 @@ export async function PUT(
               savedDatasetId = (inserted as { id: string }).id;
             }
           } else if (existingList.length === 1) {
-            const soleId = (existingList[0] as { id: string }).id;
+            const sole = existingList[0] as { id: string; config?: unknown };
+            const mergedConfig = mergeDatasetConfigArtifacts(sole.config, {
+              savedMetrics,
+              savedAnalyses,
+              datasetConfig,
+            });
             const { error: datasetError } = await adminClient
               .from("dataset")
               .update({
-                config: configJson,
+                config: mergedConfig as Json,
                 updated_at: now,
                 ...(datasetName !== undefined && { name: datasetName }),
               })
-              .eq("id", soleId);
+              .eq("id", sole.id);
             if (datasetError) {
               console.error("[metrics] Error al actualizar dataset único:", datasetError.message);
               datasetListUpdated = false;
             } else {
-              savedDatasetId = soleId;
+              savedDatasetId = sole.id;
             }
           }
         }
@@ -314,13 +385,25 @@ type SavedMetricPayload = {
 };
 
 /**
- * Obtiene los dashboard_id que usan el ETL (por etl_id o por dashboard_data_sources).
+ * Obtiene los dashboard_id que usan el dataset (preferido) o el ETL (legacy).
  */
 async function getDashboardIdsForEtl(
   adminClient: Awaited<ReturnType<typeof createServiceRoleClient>>,
-  etlId: string
+  etlId: string,
+  datasetId?: string | null
 ): Promise<string[]> {
   const ids = new Set<string>();
+
+  if (datasetId) {
+    const { data: byDataset } = await adminClient
+      .from("dashboard_data_sources")
+      .select("dashboard_id")
+      .eq("dataset_id", datasetId);
+    if (Array.isArray(byDataset)) {
+      byDataset.forEach((r: { dashboard_id: string }) => ids.add(r.dashboard_id));
+    }
+    return Array.from(ids);
+  }
 
   const { data: byEtlId } = await adminClient
     .from("dashboard")
@@ -446,15 +529,15 @@ function buildWidgetAggregationConfig(m: SavedMetricPayload): Record<string, unk
 }
 
 /**
- * Propaga las métricas actualizadas del ETL a todos los dashboards que usan ese ETL.
- * Actualiza layout.savedMetrics (por id o name) y los widgets que referencian la métrica (metricId o field por nombre).
+ * Propaga las métricas actualizadas a dashboards que usan ese dataset (o ETL legacy).
  */
 async function propagateMetricsToDashboards(
   adminClient: Awaited<ReturnType<typeof createServiceRoleClient>>,
   etlId: string,
-  savedMetrics: SavedMetricPayload[]
+  savedMetrics: SavedMetricPayload[],
+  datasetId?: string | null
 ): Promise<void> {
-  const dashboardIds = await getDashboardIdsForEtl(adminClient, etlId);
+  const dashboardIds = await getDashboardIdsForEtl(adminClient, etlId, datasetId);
   if (dashboardIds.length === 0) return;
 
   const byId = new Map<string, SavedMetricPayload>();

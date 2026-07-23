@@ -12,19 +12,23 @@ import type { DatasetDimensionsMap } from "@/types/dashboard";
 export interface DashboardDataSource {
   id: string;
   etlId: string;
+  datasetId?: string | null;
   alias: string;
   etlName: string;
+  datasetName?: string | null;
   schema: string;
   tableName: string;
   rowCount: number;
   fields: { all: string[]; numeric: string[]; string: string[]; date: string[] };
+  savedMetrics?: unknown[];
+  savedAnalyses?: unknown[];
 }
 
 /** semantic_name -> data_source_id -> physical_column_name (Dataset del Dashboard) */
 export type DatasetDimensions = DatasetDimensionsMap;
 
 export interface ETLDataResponse {
-  dashboard: { id: string; etl_id?: string | null; etl?: { id: string; title: string; name: string } | null };
+  dashboard: { id: string; etl_id?: string | null; client_id?: string | null; etl?: { id: string; title: string; name: string } | null };
   dataSources?: DashboardDataSource[];
   primarySourceId?: string | null;
   etl: { id: string; title: string; name: string } | null;

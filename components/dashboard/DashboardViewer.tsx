@@ -1399,10 +1399,18 @@ export function DashboardViewer({
 
   useEffect(() => {
     if (!etlData || etlMetricsFetchedRef.current) return;
-    const etlIds = new Set<string>();
-    if ((etlData as { etl?: { id?: string } }).etl?.id) etlIds.add((etlData as { etl: { id: string } }).etl.id);
-    (etlData as { dataSources?: { etlId: string }[] }).dataSources?.forEach((s) => etlIds.add(s.etlId));
-    if (etlIds.size === 0) {
+    const sources =
+      (etlData as { dataSources?: { etlId: string; datasetId?: string | null }[] }).dataSources ?? [];
+    const fetchKeys: Array<{ etlId: string; datasetId?: string | null }> = [];
+    if (sources.length > 0) {
+      for (const s of sources) {
+        if (!s.etlId) continue;
+        fetchKeys.push({ etlId: s.etlId, datasetId: s.datasetId ?? null });
+      }
+    } else if ((etlData as { etl?: { id?: string } }).etl?.id) {
+      fetchKeys.push({ etlId: (etlData as { etl: { id: string } }).etl.id, datasetId: null });
+    }
+    if (fetchKeys.length === 0) {
       setEtlMetricsReady(true);
       return;
     }
@@ -1412,9 +1420,12 @@ export function DashboardViewer({
       const allMetrics: SavedMetricForAnalysisMerge[] = [];
       const allAnalyses: SavedAnalysisForMerge[] = [];
       const allDerived: Array<{ name: string; expression: string; defaultAggregation?: string }> = [];
-      for (const etlId of etlIds) {
+      const seenMetricIds = new Set<string>();
+      const seenAnalysisIds = new Set<string>();
+      for (const key of fetchKeys) {
         try {
-          const res = await fetch(`/api/etl/${etlId}/metrics`);
+          const qs = key.datasetId ? `?datasetId=${encodeURIComponent(key.datasetId)}` : "";
+          const res = await fetch(`/api/etl/${key.etlId}/metrics${qs}`);
           const json = await safeJsonResponse<{
             ok?: boolean;
             data?: {
@@ -1424,16 +1435,26 @@ export function DashboardViewer({
             };
           }>(res);
           if (json.ok && Array.isArray(json.data?.savedMetrics)) {
-            allMetrics.push(...(json.data.savedMetrics as SavedMetricForAnalysisMerge[]));
+            for (const m of json.data.savedMetrics as SavedMetricForAnalysisMerge[]) {
+              const id = String((m as { id?: string }).id ?? "").trim();
+              if (id && seenMetricIds.has(id)) continue;
+              if (id) seenMetricIds.add(id);
+              allMetrics.push(m);
+            }
           }
           if (json.ok && Array.isArray(json.data?.savedAnalyses)) {
-            allAnalyses.push(...(json.data.savedAnalyses as SavedAnalysisForMerge[]));
+            for (const a of json.data.savedAnalyses as SavedAnalysisForMerge[]) {
+              const id = String((a as { id?: string }).id ?? "").trim();
+              if (id && seenAnalysisIds.has(id)) continue;
+              if (id) seenAnalysisIds.add(id);
+              allAnalyses.push(a);
+            }
           }
           if (json.ok && Array.isArray(json.data?.datasetConfig?.derivedColumns)) {
             allDerived.push(...json.data.datasetConfig.derivedColumns);
           }
         } catch {
-          // ignore per-ETL errors
+          // ignore per-dataset errors
         }
       }
       if (cancelled) return;
@@ -1565,7 +1586,10 @@ export function DashboardViewer({
         const effectiveLabelDisplayMode =
           analysisPatch?.labelDisplayMode ?? (widget as Widget).labelDisplayMode;
         const datasetDimensions = (etlData as { datasetDimensions?: Record<string, Record<string, string>> })?.datasetDimensions;
-        const dataSourcesList = (etlData as { dataSources?: { id: string; etlId?: string }[]; primarySourceId?: string })?.dataSources;
+        const dataSourcesList = (etlData as {
+          dataSources?: { id: string; etlId?: string; datasetId?: string | null; savedMetrics?: unknown[] }[];
+          primarySourceId?: string;
+        })?.dataSources;
         const widgetSourceId = widget.dataSourceId ?? (etlData as { primarySourceId?: string })?.primarySourceId ?? dataSourcesList?.[0]?.id;
         const mapDatasetField = (rawField: unknown): string => {
           const field = String(rawField ?? "").trim();
@@ -1786,9 +1810,12 @@ export function DashboardViewer({
         }
         const savedMetricsPool = Array.from(savedMetricsPoolMap.values());
 
-        const widgetEtlId = widgetSourceId
-          ? dataSourcesList?.find((s) => s.id === widgetSourceId)?.etlId ?? (etlData as { etl?: { id?: string } })?.etl?.id
-          : (etlData as { etl?: { id?: string } })?.etl?.id;
+        const widgetSource = widgetSourceId
+          ? dataSourcesList?.find((s) => s.id === widgetSourceId)
+          : dataSourcesList?.[0];
+        const widgetEtlId =
+          widgetSource?.etlId ?? (etlData as { etl?: { id?: string } })?.etl?.id;
+        const widgetDatasetId = widgetSource?.datasetId ?? null;
 
         const chartAccent = (widget as { color?: string }).color || accentColor;
 
@@ -1854,6 +1881,7 @@ export function DashboardViewer({
             widget: widgetForBuild as LoadPreviewWidgetDataParams["widget"],
             tableName: fullTableName,
             etlId: widgetEtlId,
+            datasetId: widgetDatasetId,
             sourceId: widgetSourceId,
             datasetDimensions,
             savedMetrics: savedMetricsPool.length > 0 ? savedMetricsPool : layoutSavedMetrics,

@@ -165,24 +165,19 @@ export async function createDashboardAdmin(
     return { ok: false, error: "Uno o más datasets no existen o no están disponibles." };
   }
 
-  const etlIdsOrdered: string[] = [];
-  const seenEtl = new Set<string>();
-  for (const id of datasetIds) {
-    const row = datasets.find((d) => String(d.id) === id);
-    const etlId = row?.etl_id != null ? String(row.etl_id) : "";
-    if (!etlId || seenEtl.has(etlId)) continue;
-    seenEtl.add(etlId);
-    etlIdsOrdered.push(etlId);
-  }
+  const orderedDatasets = datasetIds
+    .map((id) => datasets.find((d) => String(d.id) === id))
+    .filter((d): d is (typeof datasets)[number] => !!d);
 
-  if (etlIdsOrdered.length === 0) {
+  const etlIdsNeeded = [...new Set(orderedDatasets.map((d) => String(d.etl_id ?? "")).filter(Boolean))];
+  if (etlIdsNeeded.length === 0) {
     return { ok: false, error: "Los datasets seleccionados no tienen un ETL asociado." };
   }
 
   const { data: etlRows, error: etlErr } = await supabase
     .from("etl")
     .select("id, client_id, title, name")
-    .in("id", etlIdsOrdered);
+    .in("id", etlIdsNeeded);
 
   if (etlErr) {
     console.error("Error validating ETL ownership for dashboard create:", etlErr);
@@ -191,14 +186,14 @@ export async function createDashboardAdmin(
 
   const etls = Array.isArray(etlRows) ? etlRows : [];
   const foreign = etls.find((e) => String(e.client_id ?? "") !== String(clientId));
-  if (foreign || etls.length !== etlIdsOrdered.length) {
+  if (foreign || etls.length !== etlIdsNeeded.length) {
     return {
       ok: false,
       error: "Solo podés usar datasets del cliente seleccionado.",
     };
   }
 
-  const firstEtlId = etlIdsOrdered[0] ?? null;
+  const firstEtlId = String(orderedDatasets[0]?.etl_id ?? "") || null;
   const insertPayload: DashboardInsert = {
     client_id: clientId,
     user_id: user.id,
@@ -224,13 +219,14 @@ export async function createDashboardAdmin(
     return { ok: false, error: error.message };
   }
 
+  // Una fuente por dataset (aunque compartan ETL): independencia total a nivel Dataset.
   const { error: srcError } = await supabase.from("dashboard_data_sources").insert(
-    etlIdsOrdered.map((etl_id, i) => {
-      const dsForEtl = datasets.find((d) => String(d.etl_id) === etl_id);
-      const aliasFromDs = String(dsForEtl?.name ?? "").trim();
+    orderedDatasets.map((ds, i) => {
+      const aliasFromDs = String(ds.name ?? "").trim();
       return {
         dashboard_id: data.id,
-        etl_id,
+        etl_id: String(ds.etl_id),
+        dataset_id: String(ds.id),
         alias: aliasFromDs || (i === 0 ? "Principal" : `Fuente ${i + 1}`),
         sort_order: i,
       };
@@ -416,7 +412,7 @@ export async function updateDashboardEtl(dashboardId: string, etlId: string | nu
   return { ok: true };
 }
 
-/** Listar fuentes de datos (ETLs) del dashboard */
+/** Listar fuentes de datos (datasets) del dashboard */
 export async function getDashboardDataSources(dashboardId: string) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -427,7 +423,7 @@ export async function getDashboardDataSources(dashboardId: string) {
 
   const { data, error } = await supabase
     .from("dashboard_data_sources")
-    .select("id, etl_id, alias, sort_order")
+    .select("id, etl_id, dataset_id, alias, sort_order")
     .eq("dashboard_id", dashboardId)
     .order("sort_order", { ascending: true });
 
@@ -438,10 +434,10 @@ export async function getDashboardDataSources(dashboardId: string) {
   return { ok: true, sources: data ?? [] };
 }
 
-/** Añadir una fuente de datos (ETL) al dashboard */
+/** Añadir una fuente de datos por dataset (independiente del ETL). */
 export async function addDashboardDataSource(
   dashboardId: string,
-  etlId: string,
+  datasetIdOrEtlId: string,
   alias: string = "Nueva fuente"
 ) {
   const supabase = await createClient();
@@ -451,6 +447,45 @@ export async function addDashboardDataSource(
   const canEdit = await verifyDashboardEditAccess(dashboardId, user.id);
   if (!canEdit) return { ok: false, error: "Forbidden" };
 
+  const id = String(datasetIdOrEtlId ?? "").trim();
+  if (!id) return { ok: false, error: "datasetId requerido" };
+
+  // Preferir dataset; fallback legacy: tratar el id como etl_id.
+  let etlId = "";
+  let datasetId: string | null = null;
+  let aliasResolved = alias.trim() || "Fuente";
+
+  const { data: dsRow } = await supabase
+    .from("dataset")
+    .select("id, etl_id, name")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (dsRow?.id) {
+    datasetId = String(dsRow.id);
+    etlId = String(dsRow.etl_id ?? "");
+    const dsName = String(dsRow.name ?? "").trim();
+    if (dsName && (!alias.trim() || alias.trim() === "Nueva fuente" || alias.trim() === "Fuente")) {
+      aliasResolved = dsName;
+    }
+  } else {
+    etlId = id;
+  }
+
+  if (!etlId) return { ok: false, error: "No se pudo resolver el ETL del dataset" };
+
+  if (datasetId) {
+    const { data: dup } = await supabase
+      .from("dashboard_data_sources")
+      .select("id")
+      .eq("dashboard_id", dashboardId)
+      .eq("dataset_id", datasetId)
+      .maybeSingle();
+    if (dup?.id) {
+      return { ok: false, error: "Ese dataset ya está vinculado al dashboard." };
+    }
+  }
+
   const { data: existing } = await supabase
     .from("dashboard_data_sources")
     .select("sort_order")
@@ -459,12 +494,13 @@ export async function addDashboardDataSource(
     .limit(1)
     .maybeSingle();
 
-  const sort_order = (existing as any)?.sort_order ?? -1;
+  const sort_order = (existing as { sort_order?: number } | null)?.sort_order ?? -1;
 
   const { error } = await supabase.from("dashboard_data_sources").insert({
     dashboard_id: dashboardId,
     etl_id: etlId,
-    alias: alias.trim() || "Fuente",
+    ...(datasetId ? { dataset_id: datasetId } : {}),
+    alias: aliasResolved,
     sort_order: sort_order + 1,
   });
 

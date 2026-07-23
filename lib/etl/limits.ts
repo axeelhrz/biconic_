@@ -60,5 +60,27 @@ export const ETL_TRANSFORM_SAMPLE_LIMIT = ETL_DISTINCT_VALUES_MAX_DEFAULT;
  * Variables de entorno para join-query (API connection):
  * - ETL_JOIN_TIMEOUT_MS: timeout en ms para la ruta join-query; pasado este tiempo se devuelve 504. Default 295000 (~5 min; Vercel Pro techo 300s).
  * - ETL_JOIN_SOURCE_LIMIT_MAX: tope opcional de filas por tabla en JOIN in-memory (Firebird/cross-connection). Se aplica además del cap por número de joins.
- * - ETL_JOIN_KEYSET_BATCH: tamaño de lote al filtrar secundarias por claves (default 1500, máx 2500 en join-query).
+ * - ETL_JOIN_KEYSET_BATCH: tamaño de lote al filtrar secundarias por claves (default 1500). En Firebird nunca supera FIREBIRD_IN_LIST_MAX.
  */
+
+/**
+ * Límite duro de Firebird: no más de 1500 valores en un member list (`IN (...)`).
+ * Error típico: SQLCODE -901 "Too many values (more than 1500) in member list".
+ */
+export const FIREBIRD_IN_LIST_MAX = 1500;
+
+/** Lotes OR-AND para clave compuesta en Firebird (más seguro que IN multi-columna). */
+export const FIREBIRD_COMPOSITE_KEYSET_BATCH = 100;
+
+/** Tamaño de lote keyset para filtrar tablas secundarias (nunca > FIREBIRD_IN_LIST_MAX en Firebird). */
+export function getJoinKeysetBatchSize(dbType?: string | null): number {
+  const fromEnv = Number(process.env.ETL_JOIN_KEYSET_BATCH);
+  const requested = fromEnv > 0 ? Math.floor(fromEnv) : FIREBIRD_IN_LIST_MAX;
+  const capped = Math.max(100, Math.min(FIREBIRD_IN_LIST_MAX, requested));
+  const t = String(dbType ?? "").toLowerCase();
+  if (t === "firebird" || t === "fb" || t === "") {
+    return Math.min(capped, FIREBIRD_IN_LIST_MAX);
+  }
+  // Postgres / otros: permitir un poco más si se configura, pero default 1500.
+  return Math.max(100, Math.min(5000, fromEnv > 0 ? Math.floor(fromEnv) : FIREBIRD_IN_LIST_MAX));
+}

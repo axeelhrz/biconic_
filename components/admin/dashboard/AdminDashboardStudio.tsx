@@ -31,7 +31,7 @@ import {
 } from "@/lib/dashboard/filterInputType";
 import { useAdminDashboardEtlData } from "@/hooks/admin/useAdminDashboardEtlData";
 import { safeJsonResponse } from "@/lib/safe-json-response";
-import { searchEtls, addDashboardDataSource, removeDashboardDataSource } from "@/app/admin/(main)/dashboard/actions";
+import { searchDatasetsForClient, addDashboardDataSource, removeDashboardDataSource, type DatasetSearchResult } from "@/app/admin/(main)/dashboard/actions";
 import {
   type DashboardCardLayoutMode,
   type DashboardTheme,
@@ -571,7 +571,7 @@ export function AdminDashboardStudio({
   const [addMetricStep, setAddMetricStep] = useState<"list">("list");
   const [addSourceOpen, setAddSourceOpen] = useState(false);
   const [addSourceQuery, setAddSourceQuery] = useState("");
-  const [addSourceEtls, setAddSourceEtls] = useState<{ id: string; title: string }[]>([]);
+  const [addSourceDatasets, setAddSourceDatasets] = useState<DatasetSearchResult[]>([]);
   const [addSourceLoading, setAddSourceLoading] = useState(false);
   const [addSourceSaving, setAddSourceSaving] = useState(false);
   const [addSourceSelected, setAddSourceSelected] = useState<string | null>(null);
@@ -807,45 +807,65 @@ export function AdminDashboardStudio({
     return () => { cancelled = true; };
   }, [dashboardId]);
 
-  // Cargar métricas reutilizables y columnas derivadas de los ETLs del dashboard (solo tras cargar layout)
+  // Cargar métricas reutilizables por Dataset (no colapsar por ETL)
   useEffect(() => {
     if (!layoutLoaded || etlLoading || etlMetricsMergedRef.current) return;
     if (!etlData) {
       if (etlError) setEtlSidecarReady(true);
       return;
     }
-    const etlIds = new Set<string>();
-    if (etlData.etl?.id) etlIds.add(etlData.etl.id);
-    etlData.dataSources?.forEach((s) => etlIds.add(s.etlId));
-    if (etlIds.size === 0) return;
+    const sources = etlData.dataSources ?? [];
+    const fetchKeys: Array<{ etlId: string; datasetId?: string | null }> = [];
+    if (sources.length > 0) {
+      for (const s of sources) {
+        if (!s.etlId) continue;
+        fetchKeys.push({ etlId: s.etlId, datasetId: s.datasetId ?? null });
+      }
+    } else if (etlData.etl?.id) {
+      fetchKeys.push({ etlId: etlData.etl.id, datasetId: null });
+    }
+    if (fetchKeys.length === 0) return;
     etlMetricsMergedRef.current = true;
     let cancelled = false;
     (async () => {
       const all: SavedMetric[] = [];
       const allAnalyses: SavedAnalysis[] = [];
       const allDerived: { name: string; expression: string; defaultAggregation: string }[] = [];
-      for (const etlId of etlIds) {
+      const seenMetricIds = new Set<string>();
+      const seenAnalysisIds = new Set<string>();
+      for (const key of fetchKeys) {
         try {
-          const res = await fetch(`/api/etl/${etlId}/metrics`);
+          const qs = key.datasetId ? `?datasetId=${encodeURIComponent(key.datasetId)}` : "";
+          const res = await fetch(`/api/etl/${key.etlId}/metrics${qs}`);
           const json = await safeJsonResponse<{ ok?: boolean; data?: { savedMetrics?: unknown[]; savedAnalyses?: unknown[]; datasetConfig?: { derivedColumns?: { name: string; expression: string; defaultAggregation: string }[] } } }>(res);
           if (json.ok && Array.isArray(json.data?.savedMetrics)) {
-            all.push(...(json.data.savedMetrics as SavedMetric[]));
+            for (const m of json.data.savedMetrics as SavedMetric[]) {
+              const id = String(m.id ?? "").trim();
+              if (id && seenMetricIds.has(id)) continue;
+              if (id) seenMetricIds.add(id);
+              all.push(m);
+            }
           }
           if (json.ok && Array.isArray(json.data?.savedAnalyses)) {
-            allAnalyses.push(...(json.data.savedAnalyses as SavedAnalysis[]));
+            for (const a of json.data.savedAnalyses as SavedAnalysis[]) {
+              const id = String(a.id ?? "").trim();
+              if (id && seenAnalysisIds.has(id)) continue;
+              if (id) seenAnalysisIds.add(id);
+              allAnalyses.push(a);
+            }
           }
           if (json.ok && Array.isArray(json.data?.datasetConfig?.derivedColumns)) {
             allDerived.push(...(json.data.datasetConfig.derivedColumns as { name: string; expression: string; defaultAggregation: string }[]));
           }
         } catch {
-          // ignore per-ETL errors
+          // ignore per-dataset errors
         }
       }
       if (cancelled) return;
       setSavedMetrics((prev) => {
         const byId = new Set(prev.map((s) => String(s.id ?? "").trim()));
-        const fromEtl = all.filter((m) => !byId.has(String(m.id ?? "").trim()));
-        return fromEtl.length > 0 ? [...prev, ...fromEtl] : prev;
+        const fromDs = all.filter((m) => !byId.has(String(m.id ?? "").trim()));
+        return fromDs.length > 0 ? [...prev, ...fromDs] : prev;
       });
       if (allAnalyses.length > 0) setSavedAnalyses(allAnalyses);
       if (allDerived.length > 0) {
@@ -1392,8 +1412,16 @@ export function AdminDashboardStudio({
             setWidgets((prev) => prev.map((w) => (w.id === widgetId ? { ...w, isLoading: false } : w)));
             return;
           }
-          const widgetEtlId = sourceId ? etlData?.dataSources?.find((s) => s.id === sourceId)?.etlId ?? etlData?.etl?.id : etlData?.etl?.id;
-          const widgetDateFields = sourceId ? (etlData?.dataSources?.find((s) => s.id === sourceId)?.fields?.date ?? etlData?.fields?.date ?? []) : (etlData?.fields?.date ?? []);
+          const widgetSource = sourceId
+            ? etlData?.dataSources?.find((s) => s.id === sourceId)
+            : etlData?.dataSources?.[0];
+          const widgetEtlId = widgetSource?.etlId ?? etlData?.etl?.id;
+          const widgetDatasetId = widgetSource?.datasetId ?? null;
+          const widgetDateFields = widgetSource?.fields?.date ?? etlData?.fields?.date ?? [];
+          const sourceScopedMetrics =
+            Array.isArray(widgetSource?.savedMetrics) && widgetSource.savedMetrics.length > 0
+              ? (widgetSource.savedMetrics as SavedMetric[])
+              : savedMetrics;
           const primaryDimension = dimensions[0] ?? aggForLoad.dimension;
           const dateGroupByGranularity = (aggForLoad as { dateGroupByGranularity?: string }).dateGroupByGranularity;
           const dateGroupBySourceField = pickDateGroupBySourceField(aggForLoad) ?? primaryDimension;
@@ -1435,20 +1463,21 @@ export function AdminDashboardStudio({
               .map((m) => String(m.field).trim().toLowerCase())
           );
           const idSet = new Set([widgetMetricId, ...widgetMetricIds].filter(Boolean));
-          const savedByLinkedIds = savedMetrics.filter((s) => idSet.has(String(s.id).trim()));
+          const savedByLinkedIds = sourceScopedMetrics.filter((s) => idSet.has(String(s.id).trim()));
           const savedMetricsForBody = (savedByLinkedIds.length > 0
             ? savedByLinkedIds
-            : savedMetrics.filter((s) => (s.name || "").trim() && metricFieldNames.has((s.name || "").trim().toLowerCase()))
+            : sourceScopedMetrics.filter((s) => (s.name || "").trim() && metricFieldNames.has((s.name || "").trim().toLowerCase()))
           ).map(toSavedMetricPayload);
           const aggregatePayload = buildAggregateRequestPayload({
             tableName,
             etlId: widgetEtlId,
+            datasetId: widgetDatasetId,
             chartType: String(aggForLoad.chartType || effectiveWidget.type),
             agg: aggForLoad as Parameters<typeof buildAggregateRequestPayload>[0]["agg"],
             sourceId,
             datasetDimensions: etlData.datasetDimensions,
             globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters, ...mappedWidgetFilters],
-            savedMetrics: savedByLinkedIds.length > 0 ? savedByLinkedIds : savedMetrics,
+            savedMetrics: savedByLinkedIds.length > 0 ? savedByLinkedIds : sourceScopedMetrics,
             metricsOverride: metricsPayload as Parameters<typeof buildAggregateRequestPayload>[0]["metricsOverride"],
             derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
             fiscalYearStartMonth,
@@ -1479,9 +1508,10 @@ export function AdminDashboardStudio({
             widget: { ...widgetForBuild, aggregationConfig: aggForDisplayFetch },
             tableName,
             etlId: widgetEtlId,
+            datasetId: widgetDatasetId,
             sourceId,
             datasetDimensions: etlData.datasetDimensions,
-            savedMetrics: savedMetrics as unknown as Array<{ name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> } }>,
+            savedMetrics: sourceScopedMetrics as unknown as Array<{ name?: string; metric?: { field?: string; func?: string; alias?: string; expression?: string }; aggregationConfig?: { metrics?: Array<{ field?: string; func?: string; alias?: string; expression?: string }> } }>,
             globalFilters: [...mappedGlobalFilters, ...mappedDimensionDefaultFilters],
             metricsOverride: metricsPayload as Parameters<typeof loadPreviewWidgetData>[0]["metricsOverride"],
             derivedColumns: derivedColumnsFromLayout.length > 0 ? derivedColumnsFromLayout : undefined,
@@ -1653,33 +1683,44 @@ export function AdminDashboardStudio({
 
   useEffect(() => {
     if (!addSourceOpen) return;
+    const clientId = String(
+      (etlData?.dashboard as { client_id?: string | null } | undefined)?.client_id ?? ""
+    ).trim();
+    if (!clientId) {
+      setAddSourceDatasets([]);
+      return;
+    }
     const t = setTimeout(() => {
       setAddSourceLoading(true);
-      searchEtls(addSourceQuery)
-        .then(setAddSourceEtls)
+      searchDatasetsForClient(clientId, addSourceQuery)
+        .then(setAddSourceDatasets)
         .finally(() => setAddSourceLoading(false));
     }, 300);
     return () => clearTimeout(t);
-  }, [addSourceOpen, addSourceQuery]);
+  }, [addSourceOpen, addSourceQuery, etlData?.dashboard]);
 
   const handleAddDataSource = useCallback(async () => {
     if (!addSourceSelected) return;
     setAddSourceSaving(true);
     try {
-      const etl = addSourceEtls.find((e) => e.id === addSourceSelected);
-      const res = await addDashboardDataSource(dashboardId, addSourceSelected, etl?.title ?? "Nueva fuente");
+      const ds = addSourceDatasets.find((d) => d.id === addSourceSelected);
+      const res = await addDashboardDataSource(
+        dashboardId,
+        addSourceSelected,
+        ds?.name ?? "Nueva fuente"
+      );
       if (!res.ok) {
         toast.error(res.error ?? "Error al añadir fuente");
         return;
       }
-      toast.success("Fuente añadida");
+      toast.success("Dataset añadido");
       setAddSourceOpen(false);
       setAddSourceSelected(null);
       refetchEtlData();
     } finally {
       setAddSourceSaving(false);
     }
-  }, [dashboardId, addSourceSelected, addSourceEtls, refetchEtlData]);
+  }, [dashboardId, addSourceSelected, addSourceDatasets, refetchEtlData]);
 
   const handleRemoveDataSource = useCallback(
     async (sourceId: string) => {
@@ -3199,14 +3240,14 @@ export function AdminDashboardStudio({
       <Dialog open={addSourceOpen} onOpenChange={setAddSourceOpen}>
         <DialogContent className="sm:max-w-md border border-[var(--studio-border)]">
           <DialogHeader>
-            <DialogTitle className="text-[var(--studio-fg)]">Añadir fuente de datos</DialogTitle>
+            <DialogTitle className="text-[var(--studio-fg)]">Añadir dataset</DialogTitle>
             <DialogDescription className="text-[var(--studio-fg-muted)]">
-              Elegí un ETL para usarlo como fuente adicional en este dashboard (ej. ventas, clientes, productos).
+              Elegí un dataset como fuente adicional. Varios datasets del mismo ETL se mantienen independientes.
             </DialogDescription>
           </DialogHeader>
           <div className="py-4 space-y-2">
             <Input
-              placeholder="Buscar ETL..."
+              placeholder="Buscar dataset..."
               value={addSourceQuery}
               onChange={(e) => setAddSourceQuery(e.target.value)}
               className="border border-[var(--studio-border)] bg-transparent"
@@ -3214,24 +3255,27 @@ export function AdminDashboardStudio({
             <div className="max-h-[200px] overflow-y-auto rounded border border-[var(--studio-border)] p-2">
               {addSourceLoading ? (
                 <div className="py-4 text-center text-sm text-[var(--studio-fg-muted)]">Buscando...</div>
-              ) : addSourceEtls.length === 0 ? (
-                <div className="py-4 text-center text-sm text-[var(--studio-fg-muted)]">No se encontraron ETLs</div>
+              ) : addSourceDatasets.length === 0 ? (
+                <div className="py-4 text-center text-sm text-[var(--studio-fg-muted)]">No se encontraron datasets</div>
               ) : (
                 <div className="flex flex-col gap-1">
-                  {addSourceEtls
-                    .filter((e) => !etlData?.dataSources?.some((s) => s.etlId === e.id))
-                    .map((etl) => (
+                  {addSourceDatasets
+                    .filter((d) => !etlData?.dataSources?.some((s) => s.datasetId === d.id))
+                    .map((ds) => (
                       <button
-                        key={etl.id}
+                        key={ds.id}
                         type="button"
-                        onClick={() => setAddSourceSelected(etl.id)}
+                        onClick={() => setAddSourceSelected(ds.id)}
                         className={cn(
                           "flex items-center justify-between rounded px-3 py-2 text-left text-sm",
-                          addSourceSelected === etl.id && "bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
+                          addSourceSelected === ds.id && "bg-[var(--studio-accent-dim)] text-[var(--studio-accent)]"
                         )}
                       >
-                        {etl.title}
-                        {addSourceSelected === etl.id && <Check className="h-4 w-4" />}
+                        <span className="truncate">
+                          {ds.name}
+                          <span className="ml-2 text-[11px] text-[var(--studio-fg-muted)]">{ds.etlTitle}</span>
+                        </span>
+                        {addSourceSelected === ds.id && <Check className="h-4 w-4" />}
                       </button>
                     ))}
                 </div>
@@ -3727,20 +3771,24 @@ export function AdminDashboardStudio({
             )}
             {savedMetrics.length === 0 && savedAnalyses.length === 0 && (
               <p className="mt-3 text-sm" style={{ color: "var(--studio-fg-muted)" }}>
-                No hay métricas ni análisis guardados para este ETL. Creá una métrica en la página de métricas del ETL y volvé acá para añadirla al dashboard.
+                No hay métricas ni análisis guardados para los datasets de este dashboard. Creá métricas en el dataset correspondiente y volvé acá para añadirlas.
               </p>
             )}
           </div>
           <div className="studio-modal-cta p-4 pt-0 border-t" style={{ borderColor: "var(--studio-border)" }}>
             {(etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId) ? (
               <Link
-                href={`/admin/etl/${etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId}/metrics`}
+                href={`/admin/etl/${etlData?.etl?.id ?? etlData?.dataSources?.[0]?.etlId}/metrics${
+                  etlData?.dataSources?.[0]?.datasetId
+                    ? `?datasetId=${encodeURIComponent(etlData.dataSources[0].datasetId)}`
+                    : ""
+                }`}
                 className="inline-flex items-center justify-center gap-2 w-full rounded-lg border px-4 py-3 text-sm font-medium transition-colors hover:opacity-90"
                 style={{ borderColor: "var(--studio-border)", color: "var(--studio-accent)" }}
                 onClick={() => setAddMetricOpen(false)}
               >
                 <BarChart2 className="h-4 w-4" />
-                Ir a métricas del ETL
+                Ir a métricas del dataset
               </Link>
             ) : (
               <p className="text-sm" style={{ color: "var(--studio-fg-muted)" }}>

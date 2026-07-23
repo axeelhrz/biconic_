@@ -2560,6 +2560,7 @@ export type Database = {
           id: string
           dashboard_id: string
           etl_id: string
+          dataset_id: string | null
           alias: string
           sort_order: number
           created_at: string
@@ -2568,6 +2569,7 @@ export type Database = {
           id?: string
           dashboard_id: string
           etl_id: string
+          dataset_id?: string | null
           alias?: string
           sort_order?: number
           created_at?: string
@@ -2576,6 +2578,7 @@ export type Database = {
           id?: string
           dashboard_id?: string
           etl_id?: string
+          dataset_id?: string | null
           alias?: string
           sort_order?: number
           created_at?: string
@@ -2593,6 +2596,13 @@ export type Database = {
             columns: ["etl_id"]
             isOneToOne: false
             referencedRelation: "etl"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "dashboard_data_sources_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "dataset"
             referencedColumns: ["id"]
           },
         ]

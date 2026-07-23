@@ -5,6 +5,7 @@ import { createServiceRoleClient } from "@/lib/supabase/service";
 import postgres from "postgres";
 import { ETL_MAX_ROWS_CEILING } from "@/lib/etl/limits";
 import { expandColumnDisplayMap, type ColumnDisplayEntry } from "@/lib/etl/column-display-keys";
+import { resolveSavedArtifacts } from "@/lib/dashboard/datasetSavedArtifacts";
 
 /** Timeout para lectura de tablas grandes en monitoreo (varios millones de filas). */
 export const maxDuration = 120;
@@ -692,8 +693,21 @@ export async function GET(
 
     const etlInfo = { id: etlRow.id, title: (etlRow as any).title, name: (etlRow as any).name };
     const layout = (etlRow as { layout?: { saved_metrics?: unknown[]; saved_analyses?: unknown[]; guided_config?: Record<string, unknown> } }).layout;
-    const savedMetrics = Array.isArray(layout?.saved_metrics) ? layout.saved_metrics : [];
-    const savedAnalyses = Array.isArray(layout?.saved_analyses) ? layout.saved_analyses : [];
+    let datasetConfigForArtifacts: unknown = undefined;
+    if (datasetIdParam) {
+      const { data: dsRowEarly } = await serviceClient
+        .from("dataset")
+        .select("config, etl_id")
+        .eq("id", datasetIdParam)
+        .maybeSingle();
+      if (dsRowEarly && (dsRowEarly as { etl_id: string }).etl_id === etlId) {
+        datasetConfigForArtifacts = (dsRowEarly as { config?: unknown }).config;
+      }
+    }
+    const { savedMetrics, savedAnalyses } = resolveSavedArtifacts({
+      datasetConfig: datasetConfigForArtifacts,
+      etlLayout: layout,
+    });
     // Columnas elegidas en el ETL (Columnas a incluir): usar siempre para que Profiling muestre lo mismo que el ETL
     const guided = layout?.guided_config && typeof layout.guided_config === "object" ? layout.guided_config : undefined;
     const filterConfig = guided?.filter && typeof guided.filter === "object" ? (guided.filter as Record<string, unknown>) : undefined;
@@ -935,7 +949,9 @@ export async function GET(
         : undefined;
 
     let datasetConfig = datasetConfigFromLayout;
-    if (datasetIdParam) {
+    if (datasetConfigForArtifacts && typeof datasetConfigForArtifacts === "object") {
+      datasetConfig = datasetConfigForArtifacts as Record<string, unknown>;
+    } else if (datasetIdParam) {
       const { data: dsRow } = await serviceClient
         .from("dataset")
         .select("config, etl_id")
